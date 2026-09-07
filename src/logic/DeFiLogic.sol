@@ -303,7 +303,7 @@ library DeFiLogic {
 
     function stableCoinAllowed(address asset) external view returns (bool) {
         DeFiStorage storage $ = BittyStorage.defi();
-        if (IBittyV1Guard(BITTY_GUARD).assetCategory(asset) != ASSET_STABLE_COIN) return false;
+        if ((IBittyV1Guard(BITTY_GUARD).assetCategory(asset) & ASSET_STABLE_COIN) == 0) return false;
         if (!IBittyV1Guard(BITTY_GUARD).isAssetRegistered(asset)) return false;
         return !_allowlistActiveView($) || $.assets[asset];
     }

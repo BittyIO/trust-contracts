@@ -142,7 +142,7 @@ contract BittyV1SubVault is BittyV1SubVaultBase, IBittyV1SubVault {
         SubVaultStorage storage $ = BittyStorage.subVault();
         if (!$.gaslessEnabled) revert SubGaslessDisabled();
         if (amount == 0) revert AmountIsZero();
-        if (IBittyV1Guard(BITTY_GUARD).assetCategory(asset) != ASSET_STABLE_COIN) revert InvalidAsset();
+        if ((IBittyV1Guard(BITTY_GUARD).assetCategory(asset) & ASSET_STABLE_COIN) == 0) revert InvalidAsset();
 
         uint64 dailyLimit = $.gasDailyLimit == 0 ? SYSTEM_DAILY_MAX_GAS_BUDGET : $.gasDailyLimit;
         uint64 feeCap = $.maxFeePerOp == 0 ? SYSTEM_MAX_FEE_PER_OP : $.maxFeePerOp;
