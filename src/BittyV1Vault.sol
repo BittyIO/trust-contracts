@@ -236,7 +236,7 @@ contract BittyV1Vault is BittyV1VaultBase, IBeacon {
 
         uint256 raw = (have < needed ? have : needed) + covered;
         uint256 delivered = raw < needed ? raw : needed;
-        if (delivered < needed && !allowPartial) revert InsufficientBalance();
+        if (delivered == 0 || (delivered < needed && !allowPartial)) revert InsufficientBalance();
 
         ScheduledPaymentLogic.payScheduledOut(asset, recipient, native ? delivered : (have < needed ? have : needed));
         emit IBittyV1Vault.ScheduledPaymentPaid(id, recipient, asset, delivered, count);
