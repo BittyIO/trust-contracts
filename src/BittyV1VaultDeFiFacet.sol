@@ -79,7 +79,7 @@ contract BittyV1VaultDeFiFacet is BittyV1AccountBase {
     function _onlyAutoYieldTrigger() private view {
         if (msg.sender == address(this)) return;
         address s = _msgSender();
-        if (s == owner()) return;
+        if (s == owner() && !DeFiLogic.subOwnerLapsed()) return;
         address trigger = DeFiLogic.autoYieldTrigger();
         if (trigger != address(0) && s == trigger) return;
         revert NotAutoYieldTrigger();
@@ -227,7 +227,9 @@ contract BittyV1VaultDeFiFacet is BittyV1AccountBase {
         view
         returns (bool)
     {
-        if (signer != owner() && !DeFiLogic.isActiveAssetManager(signer)) return false;
+        if ((signer != owner() || DeFiLogic.subOwnerLapsed()) && !DeFiLogic.isActiveAssetManager(signer)) {
+            return false;
+        }
         uint256 disabledUntil = DeFiLogic.tradeDisabledUntil();
         if (disabledUntil > 0 && block.timestamp < disabledUntil) return false;
         if (!DeFiLogic.assetAllowed(buyToken)) return false;
