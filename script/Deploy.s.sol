@@ -55,14 +55,27 @@ contract Deploy is DeployScript {
     bytes32 constant IMPLEMENTATION_SALT = 0x12ee2de7bf086388b1d560eb95e7191edfab9823b41efcf6cabd0600b902d066;
 
     function deploy() public virtual override {
-        _deployLogicLibraries();
         address forwarder = _deployForwarder();
         _deployKeeper(forwarder);
-        address defiFacet = _deployFacet();
-        address subImpl = _deploySubImplementation(defiFacet);
-        address vaultImpl = _deployImplementation(defiFacet, subImpl);
+        address vaultImpl = deployImplementationChain();
         address bootstrap = _deployBootstrap();
         _deployFactory(vaultImpl, bootstrap);
+    }
+
+    /**
+     * @notice Deploy ONLY the version-bearing implementation chain — logic libraries, shared DeFi
+     *         facet, sub-vault implementation and main-vault implementation — and return the new main
+     *         implementation address. This is what {DeployNewVersion} runs for an upgrade.
+     * @dev Every step is deterministic CREATE2 and idempotent: a piece whose bytecode has not changed
+     *      is already at its address (the address IS a hash of the init code), so {_create2} finds code
+     *      there and skips it. Only what actually changed gets deployed. Changing a linked logic library
+     *      relocates the facet and the implementation too, so those redeploy in step.
+     */
+    function deployImplementationChain() internal returns (address vaultImpl) {
+        _deployLogicLibraries();
+        address defiFacet = _deployFacet();
+        address subImpl = _deploySubImplementation(defiFacet);
+        vaultImpl = _deployImplementation(defiFacet, subImpl);
     }
 
     /**
