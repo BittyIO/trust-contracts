@@ -392,4 +392,24 @@ contract SendProposalsTest is Test {
         vault.send(payee, address(usdc), 900e6, new address[](0), new uint256[](0));
         vm.stopPrank();
     }
+
+    /// The propose->approve path also respects the owner's rolling window, so operator-approved sends
+    /// can't bypass the period limit.
+    function test_theApprovalPathAlsoHitsTheWindow() public {
+        _cap(1_000, 1 days);
+
+        vm.prank(operator);
+        vault.send(payee, address(usdc), 1_000e6, new address[](0), new uint256[](0)); // id 0
+        vm.prank(operator);
+        vault.send(payee, address(usdc), 1_000e6, new address[](0), new uint256[](0)); // id 1
+
+        vm.prank(owner);
+        vault.approveSend(0);
+        assertEq(usdc.balanceOf(payee), 1_000e6, "first approval fills the window");
+
+        vm.prank(owner);
+        vm.expectRevert(PaymentExceedsPeriodLimit.selector);
+        vault.approveSend(1);
+        assertEq(usdc.balanceOf(payee), 1_000e6, "the window blocks the second approval");
+    }
 }

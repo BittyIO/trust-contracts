@@ -147,7 +147,7 @@ library PaymentLogic {
         PendingSend memory ps = vaultStorage.pendingSends[id];
         if (ps.proposer == address(0)) revert PendingSendNotFound();
         delete vaultStorage.pendingSends[id];
-        _processSendBatch(vaultStorage, ps.recipients, ps.assets, ps.amounts, true, false);
+        _processSendBatch(vaultStorage, ps.recipients, ps.assets, ps.amounts, true, true);
     }
 
     function _cancelSend(VaultStorage storage vaultStorage, uint256 id, bool byOwner, address sender) private {
