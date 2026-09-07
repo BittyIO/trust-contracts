@@ -27,6 +27,7 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
     error NotDeployer();
     error OwnershipNotRenounceable();
     error BatchNotSupported();
+    error PayRelayerFeeNotRelayable();
     event RelayerApprovalSet(address indexed relayer, bool approved);
 
     /**
@@ -110,6 +111,22 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
     function execute(ForwardRequestData calldata request) public payable virtual override {
         _setNonceTarget(request.to);
         super.execute(request);
+    }
+
+    /**
+     * @dev `payRelayerFee` is charged by the forwarder directly during a settlement, never relayed as a
+     *      user op — relaying it would let anyone drain a vault's gas budget through {execute}.
+     */
+    function _execute(ForwardRequestData calldata request, bool requireValidRequest)
+        internal
+        virtual
+        override
+        returns (bool)
+    {
+        if (request.data.length >= 4 && bytes4(request.data[:4]) == IBittyV1Vault.payRelayerFee.selector) {
+            revert PayRelayerFeeNotRelayable();
+        }
+        return super._execute(request, requireValidRequest);
     }
 
     /**

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity ^0.8.34;
 
-import {ASSET_STABLE_COIN} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
+import {ASSET_STABLE_COIN, ASSET_CRYPTO} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
@@ -15,7 +15,6 @@ import {IBittyV1Vault} from "../../src/interfaces/IBittyV1Vault.sol";
 import {
     AddressZero,
     ArrayLengthMismatch,
-    AssetNotRegistered,
     FeeExceedsPerOpCap,
     InsufficientBalance,
     InvalidAsset,
@@ -186,8 +185,15 @@ contract VaultEntrypointsTest is Test {
 
     function test_anUnregisteredActivationAssetIsRefused() public {
         MockERC20 fee = new MockERC20("Random", "RND", 6);
-        vm.expectRevert(AssetNotRegistered.selector);
+        vm.expectRevert(InvalidAsset.selector);
         _newVault(0, address(fee), 1e6);
+    }
+
+    function test_aCryptoActivationAssetIsRefused() public {
+        MockERC20 weth = new MockERC20("WETH", "WETH", 18);
+        guard.setAsset(address(weth), ASSET_CRYPTO);
+        vm.expectRevert(InvalidAsset.selector);
+        _newVault(0, address(weth), 1e18);
     }
 
     function test_anActivationFeeAboveTheSystemCapIsRefused() public {
@@ -401,8 +407,16 @@ contract VaultEntrypointsTest is Test {
     function test_narrowingToAnUnregisteredCoinIsRefused() public {
         MockERC20 rnd = new MockERC20("Random", "RND", 18);
         vm.prank(owner);
-        vm.expectRevert(AssetNotRegistered.selector);
+        vm.expectRevert(InvalidAsset.selector);
         vault.setGasless(_addr(address(rnd)), 50, 5);
+    }
+
+    function test_narrowingToACryptoCoinIsRefused() public {
+        MockERC20 weth = new MockERC20("WETH", "WETH", 18);
+        guard.setAsset(address(weth), ASSET_CRYPTO);
+        vm.prank(owner);
+        vm.expectRevert(InvalidAsset.selector);
+        vault.setGasless(_addr(address(weth)), 50, 5);
     }
 
     function test_aRepeatedCoinIsStoredOnce() public {

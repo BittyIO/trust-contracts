@@ -179,6 +179,18 @@ contract ForwarderTest is Test {
         assertEq(usdc.balanceOf(BITTY_FEE_COLLECTOR), 0, "no fee taken");
     }
 
+    function test_relayedPayRelayerFeeIsBlocked() public {
+        (address attacker, uint256 attackerPk) = makeAddrAndKey("attacker");
+        bytes memory data = abi.encodeWithSelector(BittyV1Vault.payRelayerFee.selector, address(usdc), 5e6);
+        ERC2771Forwarder.ForwardRequestData memory r = _sign(_req(attacker, address(vaultA), data), attackerPk);
+
+        vm.prank(attacker);
+        vm.expectRevert(BittyV1VaultForwarder.PayRelayerFeeNotRelayable.selector);
+        fwd.execute(r);
+
+        assertEq(usdc.balanceOf(BITTY_FEE_COLLECTOR), 0, "no fee drained");
+    }
+
     function test_forgedSignatureRejected() public {
         (, uint256 wrongPk) = makeAddrAndKey("mallory");
         ERC2771Forwarder.ForwardRequestData memory r =
