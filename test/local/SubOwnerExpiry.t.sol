@@ -16,7 +16,8 @@ import {
     NotParentVault,
     NotSubOwner,
     SubOwnerExpired,
-    SubOwnerExpiryInPast
+    SubOwnerExpiryInPast,
+    OwnershipNotRenounceable
 } from "../../src/interfaces/IBittyV1SubVault.sol";
 import {GrantTooLong} from "../../src/interfaces/IBittyV1DeFi.sol";
 import {SubOwnerDeadlineRequired} from "../../src/interfaces/IBittyV1SubVault.sol";
@@ -277,6 +278,22 @@ contract SubOwnerExpiryTest is Test {
     function _one(address a) internal pure returns (address[] memory arr) {
         arr = new address[](1);
         arr[0] = a;
+    }
+
+    /// The sub owner can rotate to a real address, but can never renounce to address(0) — that would
+    /// freeze the sub and, if the parent is renounced, cut off returnToVault and strand the funds.
+    function test_subOwnerCannotRenounceButCanTransfer() public {
+        (, BittyV1SubVault sub) = _expiring(START + GRANT);
+
+        vm.prank(subOwner);
+        vm.expectRevert(OwnershipNotRenounceable.selector);
+        sub.renounceOwnership();
+        assertEq(sub.owner(), subOwner, "owner intact");
+
+        address next = makeAddr("nextSubOwner");
+        vm.prank(subOwner);
+        sub.transferOwnership(next);
+        assertEq(sub.owner(), next, "self-rotation to a real address still works");
     }
 
     function _one(uint256 a) internal pure returns (uint256[] memory arr) {

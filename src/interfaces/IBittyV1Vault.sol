@@ -225,7 +225,7 @@ interface IBittyV1Vault {
      * @param id The id of the scheduled payment.
      * @param amount The amount to pay.
      */
-    function payScheduledAmount(uint256 id, uint256 amount) external;
+    function payScheduledAmount(uint256 id, uint256 amount, address[] calldata withdrawProtocols) external;
 
     /**
      * @notice Wrap any native ETH the vault holds into WETH. receive() auto-wraps incoming ETH, but ETH

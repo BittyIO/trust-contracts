@@ -228,7 +228,35 @@ contract BittyV1Vault is BittyV1VaultBase, IBeacon {
             uint256 count
         ) = ScheduledPaymentLogic.accrueScheduled(id, _msgSender(), withdrawProtocols.length > 0);
         if (skipped) return;
+        _settleScheduledPayout(id, recipient, asset, payoutToken, needed, have, allowPartial, count, withdrawProtocols);
+    }
 
+    function payScheduledAmount(uint256 id, uint256 amount, address[] calldata withdrawProtocols) external {
+        (
+            bool skipped,
+            address recipient,
+            address asset,
+            address payoutToken,
+            uint256 target,
+            uint256 have,
+            bool allowPartial,
+            uint256 count
+        ) = ScheduledPaymentLogic.accrueScheduledAmount(id, amount, _msgSender(), withdrawProtocols.length > 0);
+        if (skipped) return;
+        _settleScheduledPayout(id, recipient, asset, payoutToken, target, have, allowPartial, count, withdrawProtocols);
+    }
+
+    function _settleScheduledPayout(
+        uint256 id,
+        address recipient,
+        address asset,
+        address payoutToken,
+        uint256 needed,
+        uint256 have,
+        bool allowPartial,
+        uint256 count,
+        address[] calldata withdrawProtocols
+    ) private {
         bool native = asset == address(0);
         uint256 covered = have >= needed
             ? 0
@@ -240,10 +268,6 @@ contract BittyV1Vault is BittyV1VaultBase, IBeacon {
 
         ScheduledPaymentLogic.payScheduledOut(asset, recipient, native ? delivered : (have < needed ? have : needed));
         emit IBittyV1Vault.ScheduledPaymentPaid(id, recipient, asset, delivered, count);
-    }
-
-    function payScheduledAmount(uint256 id, uint256 amount) external {
-        ScheduledPaymentLogic.payScheduledAmount(id, amount, _msgSender());
     }
 
     function addWhitelistedRecipient(address recipient, address allowedAsset)

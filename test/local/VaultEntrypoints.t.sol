@@ -398,6 +398,32 @@ contract VaultEntrypointsTest is Test {
         assertEq(usdc.balanceOf(payee), 200e6, "the empty one contributed nothing, the real one covered it");
     }
 
+    /// payScheduledAmount can now source a partial payment from a yield position, not just liquid balance.
+    function test_triggerPaysAPartialAmountFromAPosition() public {
+        address trigger = makeAddr("trigger");
+        vm.prank(owner);
+        IFacet(address(vault)).deposit(address(proto), address(usdc), 950e6); // vault liquid now 50e6
+
+        IBittyV1Vault.ScheduledPayment memory sp = IBittyV1Vault.ScheduledPayment({
+            recipient: payee,
+            remainingPaymentCount: 2,
+            isImmutable: false,
+            payWithInsufficientBalance: false,
+            trigger: trigger,
+            assetAddress: address(usdc),
+            amount: 500e6,
+            startTimestamp: block.timestamp,
+            paymentInterval: 0
+        });
+        vm.prank(owner);
+        uint256 id = vault.addScheduledPayment(sp);
+
+        // Pay 300 (< the 500 scheduled): 50 from liquid + 250 pulled from the position.
+        vm.prank(trigger);
+        vault.payScheduledAmount(id, 300e6, _addr(address(proto)));
+        assertEq(usdc.balanceOf(payee), 300e6, "partial amount, topped up from the yield position");
+    }
+
     function _f2() internal view returns (IFacet) {
         return IFacet(address(vault));
     }

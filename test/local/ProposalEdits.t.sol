@@ -426,7 +426,7 @@ contract ProposalEditsTest is Test {
         uint256 id = _propose(owner, 10e6);
         vm.prank(owner);
         vm.expectRevert(PayScheduledPaymentAmountTriggerEmpty.selector);
-        vault.payScheduledAmount(id, 1e6);
+        vault.payScheduledAmount(id, 1e6, new address[](0));
     }
 
     function test_onlyTheNamedTriggerMayDrawADownPayment() public {
@@ -435,10 +435,10 @@ contract ProposalEditsTest is Test {
 
         vm.prank(owner);
         vm.expectRevert(ScheduledPaymentTriggerError.selector);
-        vault.payScheduledAmount(id, 1e6);
+        vault.payScheduledAmount(id, 1e6, new address[](0));
 
         vm.prank(trg);
-        vault.payScheduledAmount(id, 1e6);
+        vault.payScheduledAmount(id, 1e6, new address[](0));
         assertEq(usdc.balanceOf(payee), 1e6, "the trigger drew part of it");
     }
 
@@ -447,7 +447,7 @@ contract ProposalEditsTest is Test {
         uint256 id = _triggered(10e6, trg);
         vm.prank(trg);
         vm.expectRevert(PayMoreThanScheduledPaymentAmount.selector);
-        vault.payScheduledAmount(id, 11e6);
+        vault.payScheduledAmount(id, 11e6, new address[](0));
     }
 
     /// Opted into partial payment and the vault is empty: the run is SKIPPED, not reverted, so a
@@ -465,7 +465,7 @@ contract ProposalEditsTest is Test {
         assertEq(usdc.balanceOf(address(vault)), 0, "nothing left to pay with");
 
         vm.prank(trg);
-        vault.payScheduledAmount(id, 1e6);
+        vault.payScheduledAmount(id, 1e6, new address[](0));
         assertEq(usdc.balanceOf(payee), 0, "skipped quietly");
     }
 

@@ -5,6 +5,7 @@ error SubVaultNotFound();
 error SubVaultImplNotRegistered();
 error NotParentVault();
 error NotSubOwner();
+error OwnershipNotRenounceable();
 error SubOwnerExpired();
 error SubOwnerExpiryInPast();
 error SubOwnerDeadlineRequired();

@@ -306,17 +306,17 @@ contract ScheduledPaymentsTest is Test {
         uint256 id = _add(_sp(1, address(0), 10e6, block.timestamp, 0));
         vm.prank(owner);
         vm.expectRevert(PayScheduledPaymentAmountTriggerEmpty.selector);
-        vault.payScheduledAmount(id, 1e6);
+        vault.payScheduledAmount(id, 1e6, new address[](0));
     }
 
     function test_payScheduledAmountIsCappedByTheSchedule() public {
         uint256 id = _add(_sp(1, trigger, 10e6, block.timestamp, 0));
         vm.prank(trigger);
         vm.expectRevert(PayMoreThanScheduledPaymentAmount.selector);
-        vault.payScheduledAmount(id, 11e6);
+        vault.payScheduledAmount(id, 11e6, new address[](0));
 
         vm.prank(trigger);
-        vault.payScheduledAmount(id, 4e6);
+        vault.payScheduledAmount(id, 4e6, new address[](0));
         assertEq(usdc.balanceOf(payee), 4e6, "less than the schedule is fine");
     }
 
