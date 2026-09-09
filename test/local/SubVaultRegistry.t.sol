@@ -184,6 +184,17 @@ contract SubVaultRegistryTest is Test {
         assertTrue(address(sub).code.length > 0, "the contract itself persists");
     }
 
+    /// Gasless can't be toggled on a closed sub either — same guard every other setter has.
+    function test_aClosedSubCannotToggleGasless() public {
+        (uint256 id,) = _create();
+        vm.prank(owner);
+        vault.closeSubVault(id);
+
+        vm.prank(owner);
+        vm.expectRevert(SubVaultClosedError.selector);
+        vault.setSubVaultGasless(id, true);
+    }
+
     /**
      * Closing must never sever recall. The entry used to be deleted, which made every later lookup
      * revert SubVaultNotFound — so closing a sub that still held value put that value beyond the
