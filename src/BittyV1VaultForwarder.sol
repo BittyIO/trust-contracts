@@ -72,8 +72,9 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
 
     /**
      * @dev OpenZeppelin consumes the nonce inside {_execute}, which only receives the signer — so the
-     *      target is handed over in transient storage by whichever entry point is running. Transient
-     *      because it is meaningful for exactly the length of one call and must never survive it.
+     *      target is handed over in transient storage by {_execute} itself, from the request it is about
+     *      to run, right before it calls {_useNonce}. Transient because it is meaningful for exactly the
+     *      length of one call and must never survive it.
      */
     bytes32 private constant _NONCE_TARGET_SLOT = 0x8df4084eac8b84d2f835fdd215c47aed36ec12bae0062c9cfc227df184580f00; // keccak256("bitty.v1.forwarder.nonceTarget")
 
@@ -91,7 +92,7 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
     }
 
     /**
-     * @dev Bumps the lane rather than the flat sequence. Reverts if no entry point declared a target,
+     * @dev Bumps the lane rather than the flat sequence. Reverts if {_execute} did not declare a target,
      *      so a path that forgets to declare one fails loudly instead of quietly sharing lane zero.
      */
     function _useNonce(address signer) internal virtual override returns (uint256) {
@@ -106,16 +107,16 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
     }
 
     /**
-     * @notice Relay one signed request at the caller's own expense. Permissionless, as ERC-2771 intends.
-     */
-    function execute(ForwardRequestData calldata request) public payable virtual override {
-        _setNonceTarget(request.to);
-        super.execute(request);
-    }
-
-    /**
-     * @dev `payRelayerFee` is charged by the forwarder directly during a settlement, never relayed as a
+     * @dev The inherited {execute} stays permissionless, as ERC-2771 intends: anyone may relay a signed
+     *      request at their own expense. It needs no override — it routes through {_execute} below like
+     *      every other entry point, so the nonce target and the `payRelayerFee` guard both still apply.
+     *
+     *      `payRelayerFee` is charged by the forwarder directly during a settlement, never relayed as a
      *      user op — relaying it would let anyone drain a vault's gas budget through {execute}.
+     *
+     *      The nonce target is bound here, from this request's own `to`, immediately before {_useNonce}
+     *      consumes it inside `super._execute`. Doing it per request rather than once per entry point
+     *      means a batch iteration can never inherit a target left behind by a reentrant call.
      */
     function _execute(ForwardRequestData calldata request, bool requireValidRequest)
         internal
@@ -126,6 +127,7 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
         if (request.data.length >= 4 && bytes4(request.data[:4]) == IBittyV1Vault.payRelayerFee.selector) {
             revert PayRelayerFeeNotRelayable();
         }
+        _setNonceTarget(request.to);
         return super._execute(request, requireValidRequest);
     }
 
@@ -181,7 +183,6 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
         }
         if (fee != 0) _checkVaultBudget(request.to, stableCoinAddress, fee);
 
-        _setNonceTarget(request.to);
         if (!_execute(request, true)) {
             revert Address.FailedInnerCall();
         }
@@ -226,7 +227,6 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
 
         if (fee != 0) _checkVaultBudget(vault, stableCoinAddress, fee);
 
-        _setNonceTarget(vault);
         for (uint256 i; i < requests.length; ++i) {
             if (!_execute(requests[i], true)) {
                 revert Address.FailedInnerCall();

@@ -38,6 +38,48 @@ contract ContractWallet {
     }
 }
 
+/// Trusts the forwarder and does nothing — a stand-in target for an injected foreign request.
+contract TrustingNoop {
+    address private immutable FWD;
+
+    constructor(address fwd) {
+        FWD = fwd;
+    }
+
+    function isTrustedForwarder(address a) external view returns (bool) {
+        return a == FWD;
+    }
+
+    function ping() external {}
+}
+
+/// Trusts the forwarder and, the first time it is poked, re-enters {execute} with a pre-armed request
+/// aimed at a DIFFERENT target — the reentrancy that could poison the transient nonce target mid-batch.
+contract ReenteringTarget {
+    BittyV1VaultForwarder private immutable FWD;
+    ERC2771Forwarder.ForwardRequestData private injected;
+    bool private fired;
+
+    constructor(BittyV1VaultForwarder fwd) {
+        FWD = fwd;
+    }
+
+    function isTrustedForwarder(address a) external view returns (bool) {
+        return a == address(FWD);
+    }
+
+    function arm(ERC2771Forwarder.ForwardRequestData calldata r) external {
+        injected = r;
+    }
+
+    function poke() external {
+        if (!fired) {
+            fired = true;
+            FWD.execute(injected);
+        }
+    }
+}
+
 /**
  * The relay path: who may charge, what bounds the charge, and the nonce lanes.
  *
@@ -189,6 +231,43 @@ contract ForwarderTest is Test {
         fwd.execute(r);
 
         assertEq(usdc.balanceOf(BITTY_FEE_COLLECTOR), 0, "no fee drained");
+    }
+
+    /**
+     * A batch request whose execution re-enters {execute} for another target must not let that reentrant
+     * call steal a later sibling's nonce. {_execute} re-binds the nonce target to its own `request.to`
+     * right before consuming, so the poisoned transient value from the reentrant call is overwritten.
+     * Were the target set only once per entry point, req1 below would burn the injected target's lane,
+     * leave its own lane un-advanced, and stay replayable.
+     */
+    function test_batchReentrancyCannotOrphanASiblingsNonce() public {
+        ReenteringTarget rt = new ReenteringTarget(fwd);
+        TrustingNoop vt = new TrustingNoop(address(fwd));
+
+        // A foreign request aimed at `vt`, injected mid-batch by rt's reentrancy.
+        ERC2771Forwarder.ForwardRequestData memory injected = _signNonce(
+            _req(owner, address(vt), abi.encodeWithSignature("ping()")), ownerPk, fwd.nonceFor(owner, address(vt))
+        );
+        rt.arm(injected);
+
+        // Two requests, both targeting rt; the first re-enters the forwarder while it runs.
+        ERC2771Forwarder.ForwardRequestData[] memory reqs = new ERC2771Forwarder.ForwardRequestData[](2);
+        reqs[0] = _signNonce(_req(owner, address(rt), abi.encodeWithSignature("poke()")), ownerPk, 0);
+        reqs[1] = _signNonce(_req(owner, address(rt), abi.encodeWithSignature("poke()")), ownerPk, 1);
+
+        vm.prank(relayer);
+        fwd.executeBatchWithFee(reqs, address(rt), address(usdc), 0);
+
+        // Both legs consumed rt's own lane; the reentrant relay burned vt's lane, not req1's.
+        assertEq(fwd.nonceFor(owner, address(rt)), 2, "both batch legs advanced rt's lane");
+        assertEq(fwd.nonceFor(owner, address(vt)), 1, "the injected request advanced vt's own lane");
+
+        // req1 is therefore spent — replaying it is rejected.
+        ERC2771Forwarder.ForwardRequestData[] memory replay = new ERC2771Forwarder.ForwardRequestData[](1);
+        replay[0] = reqs[1];
+        vm.prank(relayer);
+        vm.expectRevert();
+        fwd.executeBatchWithFee(replay, address(rt), address(usdc), 0);
     }
 
     function test_forgedSignatureRejected() public {
