@@ -134,8 +134,6 @@ struct VaultStorage {
 
 struct SubVaultStorage {
     address vault;
-    address subOwner;
-    bool isInitialized;
     bool gaslessEnabled;
     uint64 gasDailyLimit;
     uint64 maxFeePerOp;
