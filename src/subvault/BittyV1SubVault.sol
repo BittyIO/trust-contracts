@@ -14,6 +14,8 @@ import {GrantTooLong} from "../interfaces/IBittyV1DeFi.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
+import {WETH} from "solmate/tokens/WETH.sol";
+import {IBittyV1Vault} from "../interfaces/IBittyV1Vault.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {IBittyV1Guard, ASSET_STABLE_COIN} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {
@@ -189,5 +191,12 @@ contract BittyV1SubVault is BittyV1SubVaultBase, IBittyV1SubVault {
         }
     }
 
-    receive() external payable {}
+    receive() external payable {
+        if (msg.value > 0) {
+            address weth = IBittyV1Vault(vault()).wethAddress();
+            if (msg.sender != weth) {
+                WETH(payable(weth)).deposit{value: msg.value}();
+            }
+        }
+    }
 }
