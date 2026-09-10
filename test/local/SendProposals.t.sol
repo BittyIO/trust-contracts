@@ -61,7 +61,7 @@ contract SendProposalsTest is Test {
     BittyV1Vault vault;
     MockGuard guard;
     MockERC20 usdc;
-    WETHStub weth;
+    WETHStub gasWrapped;
 
     address owner = makeAddr("owner");
     address operator = makeAddr("operator");
@@ -72,11 +72,11 @@ contract SendProposalsTest is Test {
         vm.etch(BITTY_GUARD, address(new MockGuard()).code);
         guard = MockGuard(BITTY_GUARD);
 
-        weth = new WETHStub();
+        gasWrapped = new WETHStub();
         BittyV1VaultDeFiFacet facet = new BittyV1VaultDeFiFacet();
         BittyV1SubVault subImpl = new BittyV1SubVault(address(facet));
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(subImpl));
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, address(weth), false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, address(gasWrapped), false, address(0), 0));
         vault = BittyV1Vault(payable(new ERC1967Proxy(address(impl), init)));
 
         usdc = new MockERC20("USD Coin", "USDC", 6);
@@ -290,8 +290,8 @@ contract SendProposalsTest is Test {
     // ── native ETH payout ─────────────────────────────────────────────────────
 
     function test_theZeroAssetPaysRealEthByUnwrappingWeth() public {
-        weth.mint(address(vault), 3 ether);
-        vm.deal(address(weth), 3 ether);
+        gasWrapped.mint(address(vault), 3 ether);
+        vm.deal(address(gasWrapped), 3 ether);
 
         vm.prank(owner);
         vault.send(payee, address(0), 1 ether, new address[](0), new uint256[](0));
@@ -300,8 +300,8 @@ contract SendProposalsTest is Test {
 
     function test_aRecipientThatRefusesEthFailsTheSend() public {
         RejectsEth hostile = new RejectsEth();
-        weth.mint(address(vault), 3 ether);
-        vm.deal(address(weth), 3 ether);
+        gasWrapped.mint(address(vault), 3 ether);
+        vm.deal(address(gasWrapped), 3 ether);
 
         vm.prank(owner);
         vm.expectRevert(TransferFailed.selector);
@@ -309,8 +309,8 @@ contract SendProposalsTest is Test {
     }
 
     function test_anEthSendLargerThanTheWrappedBalanceIsRefused() public {
-        weth.mint(address(vault), 1 ether);
-        vm.deal(address(weth), 1 ether);
+        gasWrapped.mint(address(vault), 1 ether);
+        vm.deal(address(gasWrapped), 1 ether);
 
         vm.prank(owner);
         vm.expectRevert();

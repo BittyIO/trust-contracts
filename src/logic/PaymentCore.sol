@@ -57,7 +57,7 @@ library PaymentCore {
             assembly ("memory-safe") {
                 tstore(_PAYING_ETH_SLOT, 1)
             }
-            WETH(payable(vaultStorage.weth)).withdraw(amount);
+            WETH(payable(vaultStorage.gasWrapped)).withdraw(amount);
             (bool ok,) = to.call{value: amount}("");
             if (!ok) revert TransferFailed();
             assembly ("memory-safe") {
@@ -75,7 +75,7 @@ library PaymentCore {
         address recipient,
         bool payWithInsufficientBalance
     ) internal returns (uint256 paidAmount) {
-        address balanceToken = erc20Address == address(0) ? vaultStorage.weth : erc20Address;
+        address balanceToken = erc20Address == address(0) ? vaultStorage.gasWrapped : erc20Address;
         uint256 balance = IERC20(balanceToken).balanceOf(address(this));
         if (!payWithInsufficientBalance && balance < amount) revert InsufficientBalance();
         paidAmount = balance < amount ? balance : amount;

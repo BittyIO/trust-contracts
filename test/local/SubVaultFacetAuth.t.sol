@@ -28,14 +28,14 @@ contract SubVaultFacetAuthTest is Test {
     address mainOwner = makeAddr("mainOwner");
     address subOwner = makeAddr("subOwner");
     address stranger = makeAddr("stranger");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
 
     function setUp() public {
         facet = new BittyV1VaultDeFiFacet();
         subImpl = new BittyV1SubVault(address(facet));
         mainImpl = new BittyV1Vault(address(facet), address(subImpl));
 
-        bytes memory mainInit = abi.encodeCall(BittyV1Vault.initialize, (mainOwner, weth, false, address(0), 0));
+        bytes memory mainInit = abi.encodeCall(BittyV1Vault.initialize, (mainOwner, gasWrapped, false, address(0), 0));
         mainVault = address(new ERC1967Proxy(address(mainImpl), mainInit));
 
         // A sub vault whose parent is the main vault, owned by a different account.

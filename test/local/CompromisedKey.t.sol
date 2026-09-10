@@ -41,7 +41,7 @@ contract CompromisedKeyTest is Test {
     address keeper = makeAddr("keeper"); // the auto-yield trigger
     address heir = makeAddr("heir"); // the rescue payment's recipient
     address stranger = makeAddr("stranger"); // no privileges, ever
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
 
     uint64 constant START = 1_000_000;
     uint64 constant SUB_GRANT = 90 days;
@@ -79,7 +79,7 @@ contract CompromisedKeyTest is Test {
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(subImpl));
         vault = BittyV1Vault(
             payable(new ERC1967Proxy(
-                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0))
+                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0))
                 ))
         );
 

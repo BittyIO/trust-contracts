@@ -41,7 +41,7 @@ contract SubOwnerExpiryTest is Test {
 
     address owner = makeAddr("owner");
     address subOwner = makeAddr("subOwner");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
 
     uint64 constant GRANT = 30 days;
     uint64 constant MAX_GRANT = 10 * 365 days;
@@ -61,7 +61,7 @@ contract SubOwnerExpiryTest is Test {
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(subImpl));
         vault = BittyV1Vault(
             payable(new ERC1967Proxy(
-                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0))
+                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0))
                 ))
         );
 

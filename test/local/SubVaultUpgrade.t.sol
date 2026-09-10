@@ -37,7 +37,7 @@ contract SubVaultUpgradeTest is Test {
 
     address owner = makeAddr("owner");
     address stranger = makeAddr("stranger");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
 
     function setUp() public {
         vm.etch(BITTY_GUARD, address(new MockImplRegistry()).code);
@@ -47,7 +47,7 @@ contract SubVaultUpgradeTest is Test {
         implV2 = new BittyV1Vault(address(facet), address(0));
         MockImplRegistry(BITTY_GUARD).setRegistered(address(implV2), true);
 
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0));
         vault = address(new ERC1967Proxy(address(implV1), init));
     }
 

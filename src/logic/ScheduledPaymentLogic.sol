@@ -213,7 +213,7 @@ library ScheduledPaymentLogic {
         }
         recipient = sp.recipient;
         asset = sp.assetAddress;
-        payoutToken = asset == address(0) ? vaultStorage.weth : asset;
+        payoutToken = asset == address(0) ? vaultStorage.gasWrapped : asset;
         needed = sp.amount;
         have = IERC20(payoutToken).balanceOf(address(this));
         allowPartial = sp.payWithInsufficientBalance;
@@ -248,7 +248,7 @@ library ScheduledPaymentLogic {
         }
         recipient = sp.recipient;
         asset = sp.assetAddress;
-        payoutToken = asset == address(0) ? vaultStorage.weth : asset;
+        payoutToken = asset == address(0) ? vaultStorage.gasWrapped : asset;
         target = amount;
         have = IERC20(payoutToken).balanceOf(address(this));
         allowPartial = sp.payWithInsufficientBalance;
@@ -276,7 +276,7 @@ library ScheduledPaymentLogic {
 
         if (!fromPosition && scheduledPayment.payWithInsufficientBalance) {
             address balanceToken =
-                scheduledPayment.assetAddress == address(0) ? vaultStorage.weth : scheduledPayment.assetAddress;
+                scheduledPayment.assetAddress == address(0) ? vaultStorage.gasWrapped : scheduledPayment.assetAddress;
             if (IERC20(balanceToken).balanceOf(address(this)) == 0) return true;
         }
 

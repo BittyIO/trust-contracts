@@ -27,7 +27,7 @@ interface IVaultView {
 contract VersionUpgradeSafetyTest is Test {
     MockGuard guard;
     MockERC20 usdc;
-    address weth = address(new MockERC20("Wrapped Ether", "WETH", 18));
+    address gasWrapped = address(new MockERC20("Wrapped Ether", "WETH", 18));
     address owner = makeAddr("owner");
 
     function setUp() public {
@@ -35,7 +35,7 @@ contract VersionUpgradeSafetyTest is Test {
         guard = MockGuard(BITTY_GUARD);
         usdc = new MockERC20("USD Coin", "USDC", 6);
         guard.setAsset(address(usdc), ASSET_STABLE_COIN);
-        guard.setAsset(weth, 2);
+        guard.setAsset(gasWrapped, 2);
     }
 
     function _impl() internal returns (BittyV1Vault) {
@@ -46,7 +46,7 @@ contract VersionUpgradeSafetyTest is Test {
     /// State written under the old code must survive an upgrade to the build carrying the getters.
     function test_upgradingToTheVersionedBuildKeepsState() public {
         BittyV1Vault a = _impl();
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, weth, true, address(usdc), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, true, address(usdc), 0));
         address vault = address(new ERC1967Proxy(address(a), init));
 
         assertTrue(IVaultView(vault).isAssetAllowed(address(usdc)), "seeded before upgrade");
@@ -69,7 +69,9 @@ contract VersionUpgradeSafetyTest is Test {
     function test_gettersResolveThroughTheProxy() public {
         BittyV1Vault a = _impl();
         address vault = address(
-            new ERC1967Proxy(address(a), abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0)))
+            new ERC1967Proxy(
+                address(a), abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0))
+            )
         );
         assertEq(IVaultView(vault).vaultVersion(), 1_000_001);
         assertEq(IVaultView(vault).versionName(), "1.0.1");

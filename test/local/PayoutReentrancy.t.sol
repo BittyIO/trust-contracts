@@ -93,7 +93,7 @@ contract PayoutReentrancyTest is Test {
     BittyV1Vault vault;
     MockGuard guard;
     MockERC20 usdc;
-    WETHStub weth;
+    WETHStub gasWrapped;
     ReentrantPayee payee;
 
     address owner = makeAddr("owner");
@@ -105,11 +105,11 @@ contract PayoutReentrancyTest is Test {
         vm.etch(BITTY_GUARD, address(new MockGuard()).code);
         guard = MockGuard(BITTY_GUARD);
 
-        weth = new WETHStub();
+        gasWrapped = new WETHStub();
         BittyV1VaultDeFiFacet facet = new BittyV1VaultDeFiFacet();
         BittyV1SubVault subImpl = new BittyV1SubVault(address(facet));
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(subImpl));
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, address(weth), false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, address(gasWrapped), false, address(0), 0));
         vault = BittyV1Vault(payable(new ERC1967Proxy(address(impl), init)));
 
         usdc = new MockERC20("USD Coin", "USDC", 6);
@@ -121,7 +121,7 @@ contract PayoutReentrancyTest is Test {
         // The vault holds wrapped ETH; the stub holds the real ETH it will hand back on withdraw.
         vm.deal(address(vault), 10 ether);
         vm.prank(address(vault));
-        weth.deposit{value: 10 ether}();
+        gasWrapped.deposit{value: 10 ether}();
     }
 
     function _nativeSchedule(uint256 amount) internal returns (uint256 id) {

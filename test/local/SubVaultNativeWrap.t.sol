@@ -16,19 +16,20 @@ import {BITTY_GUARD} from "../../src/logic/Constants.sol";
  */
 contract SubVaultNativeWrapTest is Test {
     BittyV1Vault vault;
-    WETH weth;
+    WETH gasWrapped;
     address owner = makeAddr("owner");
     address subOwner = makeAddr("subOwner");
 
     function setUp() public {
         vm.etch(BITTY_GUARD, address(new MockGuard()).code);
-        weth = new WETH();
+        gasWrapped = new WETH();
         BittyV1VaultDeFiFacet facet = new BittyV1VaultDeFiFacet();
         BittyV1SubVault subImpl = new BittyV1SubVault(address(facet));
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(subImpl));
         vault = BittyV1Vault(
             payable(new ERC1967Proxy(
-                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (owner, address(weth), false, address(0), 0))
+                    address(impl),
+                    abi.encodeCall(BittyV1Vault.initialize, (owner, address(gasWrapped), false, address(0), 0))
                 ))
         );
     }
@@ -42,17 +43,17 @@ contract SubVaultNativeWrapTest is Test {
         (bool ok,) = sub.call{value: 1 ether}("");
         assertTrue(ok, "sub accepted ETH");
         assertEq(sub.balance, 0, "no raw ETH left in the sub");
-        assertEq(weth.balanceOf(sub), 1 ether, "ETH wrapped to WETH in the sub");
+        assertEq(gasWrapped.balanceOf(sub), 1 ether, "ETH wrapped to WETH in the sub");
 
         // The parent can recall the WETH — no stranding.
         address[] memory a = new address[](1);
         uint256[] memory m = new uint256[](1);
-        a[0] = address(weth);
+        a[0] = address(gasWrapped);
         m[0] = 1 ether;
         vm.prank(owner);
         vault.recallFromSubVault(subId, a, m);
-        assertEq(weth.balanceOf(sub), 0, "recalled out of the sub");
-        assertEq(weth.balanceOf(address(vault)), 1 ether, "landed in the parent");
+        assertEq(gasWrapped.balanceOf(sub), 0, "recalled out of the sub");
+        assertEq(gasWrapped.balanceOf(address(vault)), 1 ether, "landed in the parent");
     }
 
     function test_ethFromWethIsNotRewrapped() public {
@@ -60,11 +61,11 @@ contract SubVaultNativeWrapTest is Test {
         (, address sub) = vault.createSubVault(subOwner, false, uint64(block.timestamp) + 365 days);
 
         // WETH refunding ETH (as on withdraw) must fall through untouched — never re-wrapped.
-        vm.deal(address(weth), 1 ether);
-        vm.prank(address(weth));
+        vm.deal(address(gasWrapped), 1 ether);
+        vm.prank(address(gasWrapped));
         (bool ok,) = sub.call{value: 1 ether}("");
         assertTrue(ok, "sub accepted the refund");
         assertEq(sub.balance, 1 ether, "raw ETH stays; no re-wrap");
-        assertEq(weth.balanceOf(sub), 0, "no WETH minted from a WETH-sourced transfer");
+        assertEq(gasWrapped.balanceOf(sub), 0, "no WETH minted from a WETH-sourced transfer");
     }
 }

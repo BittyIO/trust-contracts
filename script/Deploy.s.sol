@@ -4,8 +4,8 @@ pragma solidity ^0.8.34;
 import {DeployScript} from "./BaseDeploy.sol";
 import {console2} from "forge-std/console2.sol";
 import {BittyV1Vault} from "../src/BittyV1Vault.sol";
-import {BittyV1VaultBootstrap} from "../src/BittyV1VaultBootstrap.sol";
 import {BittyV1ForwarderBootstrap} from "../src/BittyV1ForwarderBootstrap.sol";
+import {BittyV1VaultFactoryBootstrap} from "../src/BittyV1VaultFactoryBootstrap.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC1967Utils} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Utils.sol";
 import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -14,7 +14,15 @@ import {BittyV1VaultDeFiFacet} from "../src/BittyV1VaultDeFiFacet.sol";
 import {BittyV1VaultFactory} from "../src/BittyV1VaultFactory.sol";
 import {BittyV1VaultForwarder} from "../src/BittyV1VaultForwarder.sol";
 import {BittyV1AutoYieldKeeper} from "../src/BittyV1AutoYieldKeeper.sol";
-import {BITTY_FORWARDER} from "../src/logic/Constants.sol";
+import {
+    BITTY_FORWARDER,
+    BITTY_GUARD,
+    BITTY_VAULT_BOOTSTRAP,
+    BITTY_VAULT_FACTORY_BOOTSTRAP,
+    CFG_GAS_WRAPPED,
+    CFG_OWNER
+} from "../src/logic/Constants.sol";
+import {IBittyV1Guard, IMPLEMENTATION_VAULT} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {PaymentLogic} from "../src/logic/PaymentLogic.sol";
 import {DeFiLogic} from "../src/logic/DeFiLogic.sol";
 import {SubVaultRegistryLogic} from "../src/logic/SubVaultRegistryLogic.sol";
@@ -55,11 +63,22 @@ contract Deploy is DeployScript {
     bytes32 constant IMPLEMENTATION_SALT = 0x12ee2de7bf086388b1d560eb95e7191edfab9823b41efcf6cabd0600b902d066;
 
     function deploy() public virtual override {
+        if (IBittyV1Guard(BITTY_GUARD).getAddress(CFG_OWNER) == address(0)) {
+            IBittyV1Guard(BITTY_GUARD).setAddress(CFG_OWNER, DEPLOYER);
+        }
         address forwarder = _deployForwarder();
         _deployKeeper(forwarder);
         address vaultImpl = deployImplementationChain();
-        address bootstrap = _deployBootstrap();
-        _deployFactory(vaultImpl, bootstrap);
+
+        if (IBittyV1Guard(BITTY_GUARD).latestImplementation(IMPLEMENTATION_VAULT) != vaultImpl) {
+            IBittyV1Guard(BITTY_GUARD).setImplementation(vaultImpl, IMPLEMENTATION_VAULT);
+        }
+        if (IBittyV1Guard(BITTY_GUARD).getAddress(CFG_GAS_WRAPPED) != getAddress("WETH")) {
+            IBittyV1Guard(BITTY_GUARD).setAddress(CFG_GAS_WRAPPED, getAddress("WETH"));
+        }
+
+        _deployBootstrap();
+        _deployFactory();
     }
 
     /**
@@ -83,10 +102,8 @@ contract Deploy is DeployScript {
      *      bytecode, and this one must never move - it is in the init code of every vault proxy, so a
      *      different bootstrap would relocate every owner's vault. See BittyV1VaultBootstrap.
      */
-    function _deployBootstrap() private returns (address bootstrap) {
-        bootstrap = _create2("BittyV1VaultBootstrap", type(BittyV1VaultBootstrap).creationCode);
-        _reportIfMoved("VAULT_BOOTSTRAP", bootstrap);
-        saveAddress("VAULT_BOOTSTRAP", bootstrap);
+    function _deployBootstrap() private view {
+        require(BITTY_VAULT_BOOTSTRAP.code.length > 0, "BITTY_VAULT_BOOTSTRAP not deployed on this chain");
     }
 
     /**
@@ -178,9 +195,6 @@ contract Deploy is DeployScript {
         deployed = address(
             uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), SIMPLE_CREATE2, bytes32(0), keccak256(initCode)))))
         );
-        // Code at a CREATE2 address proves it was deployed from THIS init code - the address is a
-        // hash of it - so presence here means "already this exact build", not merely "something is
-        // there". That is what makes skipping safe.
         if (deployed.code.length > 0) {
             console2.log(string.concat(name, " already at"), deployed);
             return deployed;
@@ -216,12 +230,6 @@ contract Deploy is DeployScript {
         }
 
         BittyV1VaultForwarder fwd = BittyV1VaultForwarder(payable(forwarder));
-        if (fwd.owner() == address(0)) {
-            address forwarderOwner = getAddress("BITTY_FORWARDER_OWNER");
-            fwd.initialize(forwarderOwner);
-            console2.log("forwarder owner set                   ", forwarderOwner);
-        }
-
         address relayer = getAddressOr("BITTY_RELAYER", address(0));
         if (relayer != address(0) && !fwd.approvedRelayers(relayer)) {
             fwd.setRelayerApproval(relayer, true);
@@ -236,10 +244,7 @@ contract Deploy is DeployScript {
     }
 
     function _deployKeeper(address forwarder) private returns (address keeper) {
-        keeper = _create2(
-            "BittyV1AutoYieldKeeper",
-            abi.encodePacked(type(BittyV1AutoYieldKeeper).creationCode, abi.encode(getAddress("BITTY_FORWARDER_OWNER")))
-        );
+        keeper = _create2("BittyV1AutoYieldKeeper", type(BittyV1AutoYieldKeeper).creationCode);
         saveAddress("BITTY_AUTO_YIELD_KEEPER", keeper);
 
         console2.log("BittyV1AutoYieldKeeper at              ", keeper);
@@ -278,21 +283,26 @@ contract Deploy is DeployScript {
         saveAddress("VAULT_IMPLEMENTATION", vaultImpl);
     }
 
-    function _deployFactory(address vaultImpl, address bootstrap) private {
-        bytes memory initCode = type(BittyV1VaultFactory).creationCode;
-        console2.log("factory initCode hash (mine against this):");
+    function _deployFactory() private {
+        address bootstrap = _create2("BittyV1VaultFactoryBootstrap", type(BittyV1VaultFactoryBootstrap).creationCode);
+        require(
+            bootstrap == BITTY_VAULT_FACTORY_BOOTSTRAP,
+            "BITTY_VAULT_FACTORY_BOOTSTRAP constant is stale: update Constants.sol"
+        );
+        bytes memory initCode = abi.encodePacked(type(ERC1967Proxy).creationCode, abi.encode(bootstrap, bytes("")));
+        console2.log("factory PROXY initCode hash (mine the salt against this):");
         console2.logBytes32(keccak256(initCode));
 
         address factory = _create2Address(FACTORY_SALT, initCode);
         if (factory.code.length == 0) {
             IMMUTABLE_CREATE2.safeCreate2(FACTORY_SALT, initCode);
-            console2.log("BittyV1VaultFactory deployed at       ", factory);
-        } else {
-            console2.log("BittyV1VaultFactory already deployed at", factory);
+            console2.log("factory proxy deployed at             ", factory);
         }
 
-        if (BittyV1VaultFactory(factory).vaultImplementation() == address(0)) {
-            BittyV1VaultFactory(factory).initialize(vaultImpl, getAddress("WETH"), bootstrap);
+        address build = _create2("BittyV1VaultFactory", type(BittyV1VaultFactory).creationCode);
+        if (address(uint160(uint256(vm.load(factory, ERC1967Utils.IMPLEMENTATION_SLOT)))) != build) {
+            UUPSUpgradeable(factory).upgradeToAndCall(build, "");
+            console2.log("factory moved to implementation       ", build);
         }
         _reportIfMoved("BITTY_VAULT_FACTORY", factory);
         saveAddress("BITTY_VAULT_FACTORY", factory);

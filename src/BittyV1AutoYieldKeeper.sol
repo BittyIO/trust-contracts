@@ -2,6 +2,8 @@
 pragma solidity ^0.8.34;
 
 import {SignatureChecker} from "openzeppelin-contracts/contracts/utils/cryptography/SignatureChecker.sol";
+import {IBittyV1Guard} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
+import {BITTY_GUARD, CFG_OWNER} from "./logic/Constants.sol";
 
 /**
  * @title BittyV1AutoYieldKeeper
@@ -27,8 +29,6 @@ contract BittyV1AutoYieldKeeper {
     bytes4 private constant MAGIC_VALUE = 0x1626ba7e;
     bytes4 private constant INVALID_VALUE = 0xffffffff;
 
-    address public owner;
-
     /**
      * @dev Forwarders whose questions this keeper answers. A SET, not one address: a vault's
      *      trustedForwarder is frozen at activation, so shipping a new forwarder leaves two generations
@@ -47,34 +47,25 @@ contract BittyV1AutoYieldKeeper {
     mapping(address signer => uint64 expiresAt) public signerExpiresAt;
 
     error NotOwner();
-    error AddressZero();
     error ExpiryInPast();
 
-    event OwnerSet(address indexed owner);
     event ForwarderSet(address indexed forwarder, bool trusted);
     event SignerSet(address indexed signer, uint64 expiresAt);
 
     modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
+        if (msg.sender != owner()) revert NotOwner();
         _;
     }
 
     /**
-     * @dev Takes only the owner, deliberately. Forwarders are added afterwards with {setForwarder}, so
-     *      this contract's init code — and therefore its CREATE2 address — does not move when a new
-     *      forwarder generation ships. Vaults freeze their trigger, so a keeper that moved would strand
-     *      every vault already activated.
+     * @dev The keeper's admin is the Bitty owner, read from the guard config rather than stored here or
+     *      taken as a constructor argument. With no constructor arguments the keeper's init code — and
+     *      therefore its CREATE2 address — is identical on every chain, and its authority still can't be
+     *      squatted: an attacker deploying the same bytecode elsewhere gets a keeper whose owner is
+     *      whatever the guard names, not them. Rotating the owner is one guard config change, fleet-wide.
      */
-    constructor(address owner_) {
-        if (owner_ == address(0)) revert AddressZero();
-        owner = owner_;
-        emit OwnerSet(owner_);
-    }
-
-    function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert AddressZero();
-        owner = newOwner;
-        emit OwnerSet(newOwner);
+    function owner() public view returns (address) {
+        return IBittyV1Guard(BITTY_GUARD).getAddress(CFG_OWNER);
     }
 
     function setForwarder(address forwarder, bool trusted) external onlyOwner {

@@ -32,11 +32,11 @@ import {TimelockLib} from "./TimelockLib.sol";
  *         config in {RiskLogic}; shared payout/protection primitives come from {PaymentCore}.
  */
 library PaymentLogic {
-    function initialize(address weth) external {
+    function initialize(address gasWrapped) external {
         VaultStorage storage vaultStorage = BittyStorage.vault();
         if (vaultStorage.isInitialized) revert AlreadyInitialized();
         vaultStorage.isInitialized = true;
-        vaultStorage.weth = weth;
+        vaultStorage.gasWrapped = gasWrapped;
     }
 
     function _processSendBatch(

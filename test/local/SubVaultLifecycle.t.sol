@@ -26,7 +26,7 @@ contract SubVaultLifecycleTest is Test {
 
     address owner = makeAddr("owner");
     address subOwner = makeAddr("subOwner");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
 
     function setUp() public {
         vm.etch(BITTY_GUARD, address(new MockGuard()).code);
@@ -35,7 +35,7 @@ contract SubVaultLifecycleTest is Test {
         subImpl = new BittyV1SubVault(address(facet));
         vaultImpl = new BittyV1Vault(address(facet), address(subImpl));
 
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0));
         vault = BittyV1Vault(payable(new ERC1967Proxy(address(vaultImpl), init)));
 
         usdc = new MockERC20("USD Coin", "USDC", 6);

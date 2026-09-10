@@ -100,7 +100,7 @@ struct DeFiStorage {
 }
 
 struct VaultStorage {
-    address weth;
+    address gasWrapped;
     bool isInitialized;
     bool renounced;
 

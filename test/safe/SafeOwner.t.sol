@@ -2,7 +2,7 @@
 pragma solidity ^0.8.34;
 
 import {BittyV1VaultBootstrap} from "../../src/BittyV1VaultBootstrap.sol";
-import {ASSET_STABLE_COIN} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
+import {ASSET_STABLE_COIN, IMPLEMENTATION_VAULT} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC2771Forwarder} from "openzeppelin-contracts/contracts/metatx/ERC2771Forwarder.sol";
@@ -18,7 +18,9 @@ import {BittyV1SubVault} from "../../src/subvault/BittyV1SubVault.sol";
 import {BittyV1VaultFactory} from "../../src/BittyV1VaultFactory.sol";
 import {BittyV1VaultForwarder} from "../../src/BittyV1VaultForwarder.sol";
 import {InvalidActivationSignature} from "../../src/interfaces/IBittyV1VaultFactory.sol";
-import {BITTY_GUARD, BITTY_FORWARDER} from "../../src/logic/Constants.sol";
+import {
+    BITTY_GUARD, BITTY_FORWARDER, BITTY_VAULT_BOOTSTRAP, CFG_GAS_WRAPPED, CFG_OWNER
+} from "../../src/logic/Constants.sol";
 
 /**
  * A Gnosis Safe as the vault owner.
@@ -47,10 +49,9 @@ contract SafeOwnerTest is Test {
     uint256[3] pks;
     address[3] owners;
 
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
     address relayer = makeAddr("relayer");
     address fwdOwner = makeAddr("fwdOwner");
-    address constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
 
     function setUp() public {
         vm.warp(1_000_000);
@@ -69,22 +70,21 @@ contract SafeOwnerTest is Test {
 
         vault = BittyV1Vault(
             payable(new ERC1967Proxy(
-                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (address(safe), weth, false, address(0), 0))
+                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (address(safe), gasWrapped, false, address(0), 0))
                 ))
         );
         usdc.mint(address(vault), 1_000e6);
 
-        BittyV1VaultFactory factoryImpl = new BittyV1VaultFactory();
-        factory = BittyV1VaultFactory(address(new ERC1967Proxy(address(factoryImpl), "")));
-        address boot = address(new BittyV1VaultBootstrap());
-        vm.prank(DEPLOYER, DEPLOYER);
-        factory.initialize(address(impl), weth, boot);
+        factory = new BittyV1VaultFactory();
+        // deployCodeTo (not etch) so the bootstrap's UUPS __self immutable resolves to this constant.
+        deployCodeTo("BittyV1VaultBootstrap.sol:BittyV1VaultBootstrap", BITTY_VAULT_BOOTSTRAP);
+        guard.setLatestImpl(IMPLEMENTATION_VAULT, address(impl));
+        MockGuard(BITTY_GUARD).setConfigAddress(CFG_GAS_WRAPPED, gasWrapped);
 
         BittyV1VaultForwarder fwdImpl = new BittyV1VaultForwarder();
         vm.etch(BITTY_FORWARDER, address(fwdImpl).code);
         fwd = BittyV1VaultForwarder(payable(BITTY_FORWARDER));
-        vm.prank(DEPLOYER, DEPLOYER);
-        fwd.initialize(fwdOwner);
+        MockGuard(BITTY_GUARD).setConfigAddress(CFG_OWNER, fwdOwner);
         vm.prank(fwdOwner);
         fwd.setRelayerApproval(relayer, true);
     }
@@ -169,7 +169,7 @@ contract SafeOwnerTest is Test {
         BittyV1Vault v = BittyV1Vault(
             payable(new ERC1967Proxy(
                     address(new BittyV1Vault(address(facet), address(new BittyV1SubVault(address(facet))))),
-                    abi.encodeCall(BittyV1Vault.initialize, (eoa, weth, false, address(0), 0))
+                    abi.encodeCall(BittyV1Vault.initialize, (eoa, gasWrapped, false, address(0), 0))
                 ))
         );
 

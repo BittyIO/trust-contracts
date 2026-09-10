@@ -28,7 +28,7 @@ contract VaultPaymentsTest is Test {
 
     address owner = makeAddr("owner");
     address payee = makeAddr("payee");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
 
     function setUp() public {
         vm.etch(BITTY_GUARD, address(new MockGuard()).code);
@@ -36,7 +36,8 @@ contract VaultPaymentsTest is Test {
         BittyV1Vault vaultImpl = new BittyV1Vault(address(facet), address(0));
         vault = BittyV1Vault(
             payable(new ERC1967Proxy(
-                    address(vaultImpl), abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0))
+                    address(vaultImpl),
+                    abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0))
                 ))
         );
         usdc = new MockERC20("USD Coin", "USDC", 6);

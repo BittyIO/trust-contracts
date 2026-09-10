@@ -193,9 +193,9 @@ contract BittyV1SubVault is BittyV1SubVaultBase, IBittyV1SubVault {
 
     receive() external payable {
         if (msg.value > 0) {
-            address weth = IBittyV1Vault(vault()).wethAddress();
-            if (msg.sender != weth) {
-                WETH(payable(weth)).deposit{value: msg.value}();
+            address gasWrapped = IBittyV1Vault(vault()).gasWrappedAddress();
+            if (msg.sender != gasWrapped) {
+                WETH(payable(gasWrapped)).deposit{value: msg.value}();
             }
         }
     }

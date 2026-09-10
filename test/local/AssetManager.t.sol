@@ -37,7 +37,7 @@ contract AssetManagerTest is Test {
     address owner = makeAddr("owner");
     address manager = makeAddr("manager");
     address stranger = makeAddr("stranger");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
 
     uint64 constant START = 1_000_000;
     uint64 constant GRANT = 90 days;
@@ -59,7 +59,7 @@ contract AssetManagerTest is Test {
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(subImpl));
         vault = BittyV1Vault(
             payable(new ERC1967Proxy(
-                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0))
+                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0))
                 ))
         );
 

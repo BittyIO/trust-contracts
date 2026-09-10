@@ -36,7 +36,7 @@ contract SubVaultGaslessTest is Test {
 
     address owner = makeAddr("owner");
     address subOwner = makeAddr("subOwner");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
     uint256 subId;
 
     function setUp() public {
@@ -48,7 +48,8 @@ contract SubVaultGaslessTest is Test {
         BittyV1Vault vaultImpl = new BittyV1Vault(address(facet), address(subImpl));
         vault = BittyV1Vault(
             payable(new ERC1967Proxy(
-                    address(vaultImpl), abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0))
+                    address(vaultImpl),
+                    abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0))
                 ))
         );
 

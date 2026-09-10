@@ -2,8 +2,10 @@
 pragma solidity ^0.8.34;
 
 import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {IBittyV1Guard} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
+import {BITTY_GUARD, CFG_OWNER} from "./logic/Constants.sol";
 
-error NotDeployer();
+error NotOwner();
 
 /**
  * @title BittyV1ForwarderBootstrap
@@ -24,15 +26,14 @@ error NotDeployer();
  *         The same reasoning as BittyV1VaultBootstrap and BittyV1GuardBootstrap.
  */
 contract BittyV1ForwarderBootstrap is UUPSUpgradeable {
-    address private constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
-
     /**
-     * @dev The deployer, by tx.origin, for the same reason the forwarder's own initialize uses it: the
-     *      proxy address is reproducible on every chain, so anyone could otherwise race the deploy on a
-     *      chain Bitty has not reached yet and hand the forwarder an implementation of their own. The
-     *      forwarder's owner takes over the moment this contract stops being the implementation.
+     * @dev Gated on the guard's configured owner: the proxy address is reproducible on every chain, so
+     *      anyone could otherwise race the deploy on a chain Bitty has not reached yet and hand the
+     *      forwarder an implementation of their own. Only the Bitty owner may perform the first upgrade;
+     *      the forwarder's own owner (the same guard value) takes over the moment this contract stops
+     *      being the implementation. An unconfigured guard (owner 0) fails closed — no upgrade at all.
      */
     function _authorizeUpgrade(address) internal view override {
-        if (tx.origin != DEPLOYER) revert NotDeployer();
+        if (msg.sender != IBittyV1Guard(BITTY_GUARD).getAddress(CFG_OWNER)) revert NotOwner();
     }
 }

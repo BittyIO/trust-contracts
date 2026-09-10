@@ -12,10 +12,10 @@ import {BittyV1Vault} from "../../src/BittyV1Vault.sol";
 import {BittyV1SubVault} from "../../src/subvault/BittyV1SubVault.sol";
 import {BittyV1VaultForwarder} from "../../src/BittyV1VaultForwarder.sol";
 import {IBittyV1Owner} from "../../src/interfaces/IBittyV1Owner.sol";
-import {BITTY_GUARD, BITTY_FORWARDER, BITTY_FEE_COLLECTOR} from "../../src/logic/Constants.sol";
+import {BITTY_GUARD, BITTY_FORWARDER, BITTY_FEE_COLLECTOR, CFG_OWNER} from "../../src/logic/Constants.sol";
 
 /// Answers ERC-1271 for one key, so a contract-owned vault can be relayed.
-import {BittyV1ForwarderBootstrap, NotDeployer as BootstrapNotDeployer} from "../../src/BittyV1ForwarderBootstrap.sol";
+import {BittyV1ForwarderBootstrap, NotOwner as BootstrapNotOwner} from "../../src/BittyV1ForwarderBootstrap.sol";
 import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 contract ContractWallet {
@@ -99,19 +99,17 @@ contract ForwarderTest is Test {
     address owner;
     address relayer = makeAddr("relayer");
     address fwdOwner = makeAddr("fwdOwner");
-    address weth = makeAddr("weth");
-    address constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
+    address gasWrapped = makeAddr("gasWrapped");
 
     function setUp() public {
         owner = vm.addr(ownerPk);
         vm.etch(BITTY_GUARD, address(new MockGuard()).code);
         guard = MockGuard(BITTY_GUARD);
+        guard.setConfigAddress(CFG_OWNER, fwdOwner); // the forwarder reads its owner from the guard
 
         // The vault trusts BITTY_FORWARDER by constant, so the forwarder has to live there.
         vm.etch(BITTY_FORWARDER, address(new BittyV1VaultForwarder()).code);
         fwd = BittyV1VaultForwarder(payable(BITTY_FORWARDER));
-        vm.prank(DEPLOYER, DEPLOYER);
-        fwd.initialize(fwdOwner);
         vm.prank(fwdOwner);
         fwd.setRelayerApproval(relayer, true);
 
@@ -128,7 +126,7 @@ contract ForwarderTest is Test {
     }
 
     function _newVault(address o) internal returns (BittyV1Vault) {
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (o, weth, false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (o, gasWrapped, false, address(0), 0));
         return BittyV1Vault(payable(new ERC1967Proxy(address(impl), init)));
     }
 
@@ -417,19 +415,9 @@ contract ForwarderTest is Test {
 
     // ── admin ─────────────────────────────────────────────────────────────────
 
-    function test_onlyDeployerMayInitialize() public {
-        vm.etch(address(0xF00D), address(new BittyV1VaultForwarder()).code);
-        BittyV1VaultForwarder fresh = BittyV1VaultForwarder(payable(address(0xF00D)));
-        address squatter = makeAddr("squatter");
-        vm.prank(squatter, squatter);
-        vm.expectRevert(BittyV1VaultForwarder.NotDeployer.selector);
-        fresh.initialize(squatter);
-    }
-
-    function test_ownershipIsNotRenounceable() public {
-        vm.prank(fwdOwner);
-        vm.expectRevert(BittyV1VaultForwarder.OwnershipNotRenounceable.selector);
-        fwd.renounceOwnership();
+    /// The owner is the guard's configured owner — no per-forwarder owner to squat or initialize.
+    function test_ownerIsTheGuardConfiguredOwner() public view {
+        assertEq(fwd.owner(), fwdOwner, "owner is read from the guard config");
     }
 
     function test_onlyOwnerMayApproveRelayers() public {
@@ -628,12 +616,10 @@ contract ForwarderTest is Test {
     function test_forwarderSurvivesAnImplementationChange() public {
         address proxy = address(new ERC1967Proxy(address(new BittyV1ForwarderBootstrap()), ""));
         address build = address(new BittyV1VaultForwarder());
-        vm.prank(DEPLOYER, DEPLOYER);
+        vm.prank(fwdOwner); // the guard-configured owner authorizes the first upgrade off the bootstrap
         UUPSUpgradeable(proxy).upgradeToAndCall(build, "");
 
         BittyV1VaultForwarder f = BittyV1VaultForwarder(payable(proxy));
-        vm.prank(DEPLOYER, DEPLOYER);
-        f.initialize(fwdOwner);
         vm.prank(fwdOwner);
         f.setRelayerApproval(relayer, true);
 
@@ -654,13 +640,16 @@ contract ForwarderTest is Test {
     }
 
     /// The proxy address is reproducible on every chain, so the window before the first upgrade is
-    /// reachable by anyone on a chain Bitty has not deployed to yet. Only the deployer may close it.
-    function test_onlyDeployerMayUpgradeOffTheForwarderBootstrap() public {
+    /// reachable by anyone on a chain Bitty has not deployed to yet. Only the guard's owner may close it.
+    function test_onlyTheOwnerMayUpgradeOffTheForwarderBootstrap() public {
         address proxy = address(new ERC1967Proxy(address(new BittyV1ForwarderBootstrap()), ""));
         address build = address(new BittyV1VaultForwarder());
-        address stranger = makeAddr("stranger");
-        vm.prank(stranger, stranger);
-        vm.expectRevert(BootstrapNotDeployer.selector);
+
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert(BootstrapNotOwner.selector);
+        UUPSUpgradeable(proxy).upgradeToAndCall(build, "");
+
+        vm.prank(fwdOwner); // the guard-configured owner can
         UUPSUpgradeable(proxy).upgradeToAndCall(build, "");
     }
 }

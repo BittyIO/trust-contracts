@@ -8,24 +8,23 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {SignatureChecker} from "openzeppelin-contracts/contracts/utils/cryptography/SignatureChecker.sol";
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IBittyV1Vault} from "./interfaces/IBittyV1Vault.sol";
-import {Ownable2StepUpgradeable} from "openzeppelin-contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
+import {IBittyV1Guard} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {BITTY_GUARD, CFG_OWNER} from "./logic/Constants.sol";
 
 /**
- * @dev Ownership is the UPGRADEABLE OpenZeppelin variant purely so it initializes instead of taking a
- *      constructor argument. This forwarder must have no constructor arguments at all — they would be
- *      appended to the init code and give it a different address on every chain, which is the one
- *      property the whole deployment depends on.
+ * @dev The forwarder must have no constructor arguments — they would be appended to the init code and
+ *      give it a different address on every chain, the one property the whole deployment depends on. Its
+ *      admin (who may approve relayers and authorize upgrades) is therefore not stored or set at init;
+ *      {owner} reads it from the guard config, so there is no per-forwarder owner to squat on a fresh
+ *      chain and rotating it is one guard config change, fleet-wide.
  */
-contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUPSUpgradeable {
-    address public constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
-
+contract BittyV1VaultForwarder is ERC2771Forwarder, UUPSUpgradeable {
     error FeeExceedsVaultBudget();
     error NotApprovedRelayer();
     error EmptyBatch();
     error BatchTargetMismatch();
-    error NotDeployer();
-    error OwnershipNotRenounceable();
+    error NotOwner();
     error BatchNotSupported();
     error PayRelayerFeeNotRelayable();
     event RelayerApprovalSet(address indexed relayer, bool approved);
@@ -48,10 +47,19 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
     }
 
     /**
-     * @dev The relayer-allowlist owner, which is the only authority this contract has. Deliberately not
-     *      a separate upgrade admin: an owner that can already decide who may charge a vault's gas
-     *      budget is not made more powerful by also deciding the code.
+     * @dev The relayer-allowlist owner is the Bitty owner from the guard config — the only authority this
+     *      contract has. Deliberately not a separate upgrade admin: an owner that can already decide who
+     *      may charge a vault's gas budget is not made more powerful by also deciding the code.
      */
+    function owner() public view returns (address) {
+        return IBittyV1Guard(BITTY_GUARD).getAddress(CFG_OWNER);
+    }
+
+    modifier onlyOwner() {
+        if (msg.sender != owner()) revert NotOwner();
+        _;
+    }
+
     function _authorizeUpgrade(address) internal override onlyOwner {}
 
     /**
@@ -139,23 +147,6 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
      */
     function executeBatch(ForwardRequestData[] calldata, address payable) public payable virtual override {
         revert BatchNotSupported();
-    }
-
-    /**
-     * @notice Set the owner of the relayer allowlist. Callable once, by the DEPLOYER's transaction.
-     */
-    function initialize(address owner_) external initializer {
-        if (tx.origin != DEPLOYER) revert NotDeployer();
-        __Ownable_init(owner_);
-    }
-
-    /**
-     * @dev Renouncing would leave the relayer allowlist frozen forever: this forwarder is a
-     *      compile-time constant in every vault of the generation, so there is no replacing it and no
-     *      recovering from an owner of zero.
-     */
-    function renounceOwnership() public pure override {
-        revert OwnershipNotRenounceable();
     }
 
     function setRelayerApproval(address relayer, bool approved) external onlyOwner {
