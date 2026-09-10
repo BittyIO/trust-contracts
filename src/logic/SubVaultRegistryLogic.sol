@@ -64,6 +64,7 @@ library SubVaultRegistryLogic {
         SubVaultEntry storage e = _entry(BittyStorage.vault(), subId);
         IBittyV1SubVault(e.account).recall(assets, amounts);
         for (uint256 i; i < assets.length; ++i) {
+            if (amounts[i] == 0) continue;
             emit SubVaultRecalled(subId, assets[i], amounts[i]);
         }
     }
