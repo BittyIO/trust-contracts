@@ -8,25 +8,25 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {SignatureChecker} from "openzeppelin-contracts/contracts/utils/cryptography/SignatureChecker.sol";
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IBittyV1Vault} from "./interfaces/IBittyV1Vault.sol";
-import {Ownable2StepUpgradeable} from "openzeppelin-contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
+import {IBittyV1Guard} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {BITTY_GUARD, CFG_OWNER} from "./logic/Constants.sol";
 
 /**
- * @dev Ownership is the UPGRADEABLE OpenZeppelin variant purely so it initializes instead of taking a
- *      constructor argument. This forwarder must have no constructor arguments at all — they would be
- *      appended to the init code and give it a different address on every chain, which is the one
- *      property the whole deployment depends on.
+ * @dev The forwarder must have no constructor arguments — they would be appended to the init code and
+ *      give it a different address on every chain, the one property the whole deployment depends on. Its
+ *      admin (who may approve relayers and authorize upgrades) is therefore not stored or set at init;
+ *      {owner} reads it from the guard config, so there is no per-forwarder owner to squat on a fresh
+ *      chain and rotating it is one guard config change, fleet-wide.
  */
-contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUPSUpgradeable {
-    address public constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
-
+contract BittyV1VaultForwarder is ERC2771Forwarder, UUPSUpgradeable {
     error FeeExceedsVaultBudget();
     error NotApprovedRelayer();
     error EmptyBatch();
     error BatchTargetMismatch();
-    error NotDeployer();
-    error OwnershipNotRenounceable();
+    error NotOwner();
     error BatchNotSupported();
+    error PayRelayerFeeNotRelayable();
     event RelayerApprovalSet(address indexed relayer, bool approved);
 
     /**
@@ -47,10 +47,19 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
     }
 
     /**
-     * @dev The relayer-allowlist owner, which is the only authority this contract has. Deliberately not
-     *      a separate upgrade admin: an owner that can already decide who may charge a vault's gas
-     *      budget is not made more powerful by also deciding the code.
+     * @dev The relayer-allowlist owner is the Bitty owner from the guard config — the only authority this
+     *      contract has. Deliberately not a separate upgrade admin: an owner that can already decide who
+     *      may charge a vault's gas budget is not made more powerful by also deciding the code.
      */
+    function owner() public view returns (address) {
+        return IBittyV1Guard(BITTY_GUARD).getAddress(CFG_OWNER);
+    }
+
+    modifier onlyOwner() {
+        if (msg.sender != owner()) revert NotOwner();
+        _;
+    }
+
     function _authorizeUpgrade(address) internal override onlyOwner {}
 
     /**
@@ -71,8 +80,9 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
 
     /**
      * @dev OpenZeppelin consumes the nonce inside {_execute}, which only receives the signer — so the
-     *      target is handed over in transient storage by whichever entry point is running. Transient
-     *      because it is meaningful for exactly the length of one call and must never survive it.
+     *      target is handed over in transient storage by {_execute} itself, from the request it is about
+     *      to run, right before it calls {_useNonce}. Transient because it is meaningful for exactly the
+     *      length of one call and must never survive it.
      */
     bytes32 private constant _NONCE_TARGET_SLOT = 0x8df4084eac8b84d2f835fdd215c47aed36ec12bae0062c9cfc227df184580f00; // keccak256("bitty.v1.forwarder.nonceTarget")
 
@@ -90,7 +100,7 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
     }
 
     /**
-     * @dev Bumps the lane rather than the flat sequence. Reverts if no entry point declared a target,
+     * @dev Bumps the lane rather than the flat sequence. Reverts if {_execute} did not declare a target,
      *      so a path that forgets to declare one fails loudly instead of quietly sharing lane zero.
      */
     function _useNonce(address signer) internal virtual override returns (uint256) {
@@ -105,11 +115,28 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
     }
 
     /**
-     * @notice Relay one signed request at the caller's own expense. Permissionless, as ERC-2771 intends.
+     * @dev The inherited {execute} stays permissionless, as ERC-2771 intends: anyone may relay a signed
+     *      request at their own expense. It needs no override — it routes through {_execute} below like
+     *      every other entry point, so the nonce target and the `payRelayerFee` guard both still apply.
+     *
+     *      `payRelayerFee` is charged by the forwarder directly during a settlement, never relayed as a
+     *      user op — relaying it would let anyone drain a vault's gas budget through {execute}.
+     *
+     *      The nonce target is bound here, from this request's own `to`, immediately before {_useNonce}
+     *      consumes it inside `super._execute`. Doing it per request rather than once per entry point
+     *      means a batch iteration can never inherit a target left behind by a reentrant call.
      */
-    function execute(ForwardRequestData calldata request) public payable virtual override {
+    function _execute(ForwardRequestData calldata request, bool requireValidRequest)
+        internal
+        virtual
+        override
+        returns (bool)
+    {
+        if (request.data.length >= 4 && bytes4(request.data[:4]) == IBittyV1Vault.payRelayerFee.selector) {
+            revert PayRelayerFeeNotRelayable();
+        }
         _setNonceTarget(request.to);
-        super.execute(request);
+        return super._execute(request, requireValidRequest);
     }
 
     /**
@@ -120,23 +147,6 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
      */
     function executeBatch(ForwardRequestData[] calldata, address payable) public payable virtual override {
         revert BatchNotSupported();
-    }
-
-    /**
-     * @notice Set the owner of the relayer allowlist. Callable once, by the DEPLOYER's transaction.
-     */
-    function initialize(address owner_) external initializer {
-        if (tx.origin != DEPLOYER) revert NotDeployer();
-        __Ownable_init(owner_);
-    }
-
-    /**
-     * @dev Renouncing would leave the relayer allowlist frozen forever: this forwarder is a
-     *      compile-time constant in every vault of the generation, so there is no replacing it and no
-     *      recovering from an owner of zero.
-     */
-    function renounceOwnership() public pure override {
-        revert OwnershipNotRenounceable();
     }
 
     function setRelayerApproval(address relayer, bool approved) external onlyOwner {
@@ -164,7 +174,6 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
         }
         if (fee != 0) _checkVaultBudget(request.to, stableCoinAddress, fee);
 
-        _setNonceTarget(request.to);
         if (!_execute(request, true)) {
             revert Address.FailedInnerCall();
         }
@@ -209,7 +218,6 @@ contract BittyV1VaultForwarder is ERC2771Forwarder, Ownable2StepUpgradeable, UUP
 
         if (fee != 0) _checkVaultBudget(vault, stableCoinAddress, fee);
 
-        _setNonceTarget(vault);
         for (uint256 i; i < requests.length; ++i) {
             if (!_execute(requests[i], true)) {
                 revert Address.FailedInnerCall();

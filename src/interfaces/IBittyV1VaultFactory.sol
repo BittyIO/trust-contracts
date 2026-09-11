@@ -7,16 +7,6 @@ error NotDeployer();
 
 interface IBittyV1VaultFactory {
     /**
-     * @notice Initialize the factory.
-     * @param vaultImplementation_ The address of the vault implementation.
-     * @param wethAddress_ The address of the weth.
-     *        relaying off). Factory-level: a vault must never trust a forwarder chosen by whoever
-     *        happened to activate it.
-     *        factory-level, so the forwarder decides how much it reclaims but never to whom.
-     */
-    function initialize(address vaultImplementation_, address wethAddress_) external;
-
-    /**
      * @notice Activate your own vault, paying its gas yourself.
      *
      * @dev Activate the vault by ETH as gas from the owner.

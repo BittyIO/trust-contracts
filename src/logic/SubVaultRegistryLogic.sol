@@ -64,6 +64,7 @@ library SubVaultRegistryLogic {
         SubVaultEntry storage e = _entry(BittyStorage.vault(), subId);
         IBittyV1SubVault(e.account).recall(assets, amounts);
         for (uint256 i; i < assets.length; ++i) {
+            if (amounts[i] == 0) continue;
             emit SubVaultRecalled(subId, assets[i], amounts[i]);
         }
     }
@@ -90,6 +91,7 @@ library SubVaultRegistryLogic {
 
     function setSubVaultGasless(uint256 subId, bool enabled) external {
         SubVaultEntry storage e = _entry(BittyStorage.vault(), subId);
+        if (e.closed) revert SubVaultClosedError();
         e.gaslessEnabled = enabled;
         IBittyV1SubVault(e.account).setGaslessEnabled(enabled);
         emit SubVaultGaslessSet(subId, enabled);

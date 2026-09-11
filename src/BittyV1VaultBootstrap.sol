@@ -2,7 +2,8 @@
 pragma solidity ^0.8.34;
 
 import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {VaultAlreadyActivated} from "./interfaces/IBittyV1VaultFactory.sol";
+
+error VaultAlreadyActivated();
 
 /**
  * @title BittyV1VaultBootstrap

@@ -35,7 +35,7 @@ contract VaultCoreTest is Test {
     BittyV1SubVault subImpl;
     BittyV1VaultDeFiFacet facet;
     MockGuard guard;
-    WETH weth;
+    WETH gasWrapped;
     MockERC20 usdc;
 
     address owner = makeAddr("owner");
@@ -44,17 +44,17 @@ contract VaultCoreTest is Test {
     function setUp() public {
         vm.etch(BITTY_GUARD, address(new MockGuard()).code);
         guard = MockGuard(BITTY_GUARD);
-        weth = new WETH();
+        gasWrapped = new WETH();
 
         facet = new BittyV1VaultDeFiFacet();
         subImpl = new BittyV1SubVault(address(facet));
         impl = new BittyV1Vault(address(facet), address(subImpl));
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, address(weth), false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, address(gasWrapped), false, address(0), 0));
         vault = BittyV1Vault(payable(new ERC1967Proxy(address(impl), init)));
 
         usdc = new MockERC20("USD Coin", "USDC", 6);
         guard.setAsset(address(usdc), ASSET_STABLE_COIN);
-        guard.setAsset(address(weth), 2);
+        guard.setAsset(address(gasWrapped), 2);
     }
 
     // ── ownership ─────────────────────────────────────────────────────────────
@@ -137,23 +137,23 @@ contract VaultCoreTest is Test {
         (bool ok,) = address(vault).call{value: 1 ether}("");
         assertTrue(ok);
         assertEq(address(vault).balance, 0, "no bare ETH left");
-        assertEq(weth.balanceOf(address(vault)), 1 ether, "wrapped");
+        assertEq(gasWrapped.balanceOf(address(vault)), 1 ether, "wrapped");
     }
 
     /// And anything that arrived some other way can be swept by anyone — it only helps the vault.
     function test_anyoneMaySweepStrandedEth() public {
         vm.deal(address(vault), 3 ether);
         vm.prank(makeAddr("passerby"));
-        vault.ETHToWETH();
-        assertEq(weth.balanceOf(address(vault)), 3 ether);
+        vault.wrapNative();
+        assertEq(gasWrapped.balanceOf(address(vault)), 3 ether);
     }
 
     /// Unwrapping WETH must not re-enter the receive hook and wrap it straight back.
-    function test_wethUnwrapDoesNotBounceBack() public {
+    function test_gasWrappedUnwrapDoesNotBounceBack() public {
         vm.deal(address(vault), 1 ether);
-        vault.ETHToWETH();
+        vault.wrapNative();
         vm.prank(address(vault));
-        weth.withdraw(0.5 ether);
+        gasWrapped.withdraw(0.5 ether);
         assertEq(address(vault).balance, 0.5 ether, "stayed unwrapped");
     }
 
@@ -190,13 +190,13 @@ contract VaultCoreTest is Test {
 
     function test_cannotInitializeTwice() public {
         vm.expectRevert();
-        vault.initialize(owner, address(weth), false, address(0), 0);
+        vault.initialize(owner, address(gasWrapped), false, address(0), 0);
     }
 
     /// The implementation itself is not usable as a vault — initializers are disabled on it.
     function test_theImplementationCannotBeInitialized() public {
         vm.expectRevert();
-        impl.initialize(makeAddr("squatter"), address(weth), false, address(0), 0);
+        impl.initialize(makeAddr("squatter"), address(gasWrapped), false, address(0), 0);
     }
 
     function test_immutablesAreWired() public view {
@@ -221,6 +221,6 @@ contract VaultCoreTest is Test {
     }
 
     function test_theVaultReportsTheWethItUnwrapsThrough() public view {
-        assertEq(vault.wethAddress(), address(weth), "the app needs this to present WETH as ETH");
+        assertEq(vault.gasWrappedAddress(), address(gasWrapped), "the app needs this to present WETH as ETH");
     }
 }

@@ -97,7 +97,9 @@ solc_version = "0.8.34"
 evm_version = "prague"
 optimizer = true
 optimizer_runs = 10000
-via_ir = false
+# via_ir ON so the vault (ScheduledPaymentLogic needs it) compiles; the Safe contracts are exempted to
+# the legacy pipeline below, since their pre-memory-safe assembly stack-too-deeps under via_ir.
+via_ir = true
 
 remappings = [
     "forge-std/=lib/forge-std/src/",
@@ -108,3 +110,19 @@ remappings = [
     "solmate/=lib/solmate/src/",
     "safe-contracts/=lib/safe-smart-account/contracts/",
 ]
+
+# Gnosis Safe's assembly predates the memory-safe annotation and hits stack-too-deep under via_ir, so
+# its contracts (and the artifacts-only SafeArtifacts.sol that pulls them in) compile under the legacy
+# pipeline. They import no Bitty source, so this split is clean. The restriction below routes those
+# paths to this legacy compiler profile.
+[[profile.safe.additional_compiler_profiles]]
+name = "legacy"
+via_ir = false
+
+[[profile.safe.compilation_restrictions]]
+paths = "lib/safe-smart-account/contracts/**"
+via_ir = false
+
+[[profile.safe.compilation_restrictions]]
+paths = "test/safe/SafeArtifacts.sol"
+via_ir = false

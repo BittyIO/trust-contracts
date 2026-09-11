@@ -50,7 +50,7 @@ contract DeFiTradingTest is Test {
     MockSettlement settlement;
 
     address owner = makeAddr("owner");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
     bytes4 constant MAGIC = 0x1626ba7e;
     bytes4 constant INVALID = 0xffffffff;
 
@@ -61,7 +61,7 @@ contract DeFiTradingTest is Test {
         BittyV1VaultDeFiFacet facet = new BittyV1VaultDeFiFacet();
         BittyV1SubVault subImpl = new BittyV1SubVault(address(facet));
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(subImpl));
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0));
         vault = BittyV1Vault(payable(new ERC1967Proxy(address(impl), init)));
 
         t0 = new MockERC20("Token0", "T0", 18);

@@ -6,14 +6,13 @@ import {
     AmountIsZero,
     OnlyImmutablePayableAfterRenounce,
     InvalidAsset,
-    AssetNotRegistered,
     InsufficientBalance,
     FeeExceedsPerOpCap,
     GasBudgetExceeded,
     GasBudgetTooHigh
 } from "../interfaces/IBittyV1Vault.sol";
 import {IBittyV1Owner} from "../interfaces/IBittyV1Owner.sol";
-import {IBittyV1Guard} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
+import {IBittyV1Guard, ASSET_STABLE_COIN} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -76,7 +75,7 @@ library GaslessLogic {
 
         for (uint256 i = 0; i < assets.length; i++) {
             address asset = assets[i];
-            if (!IBittyV1Guard(BITTY_GUARD).isAssetRegistered(asset)) revert AssetNotRegistered();
+            if ((IBittyV1Guard(BITTY_GUARD).assetCategory(asset) & ASSET_STABLE_COIN) == 0) revert InvalidAsset();
             if (asset == address(0) || asset == SENTINEL || allowed[asset] != address(0)) continue;
             allowed[asset] = allowed[SENTINEL];
             allowed[SENTINEL] = asset;
@@ -122,7 +121,7 @@ library GaslessLogic {
     function payActivationFee(address asset, uint256 amount) external {
         VaultStorage storage vaultStorage = BittyStorage.vault();
         _onlyInitialized(vaultStorage);
-        if (!IBittyV1Guard(BITTY_GUARD).isAssetRegistered(asset)) revert AssetNotRegistered();
+        if ((IBittyV1Guard(BITTY_GUARD).assetCategory(asset) & ASSET_STABLE_COIN) == 0) revert InvalidAsset();
         uint256 value = Math.mulDiv(amount, 1e18, 10 ** IERC20Metadata(asset).decimals(), Math.Rounding.Ceil);
         if (value > uint256(SYSTEM_MAX_FEE_PER_OP) * 1e18) revert FeeExceedsPerOpCap();
         if (IERC20(asset).balanceOf(address(this)) < amount) revert InsufficientBalance();
@@ -132,9 +131,10 @@ library GaslessLogic {
 
     function _gaslessAssetAllowed(VaultStorage storage vaultStorage, address asset) private view returns (bool) {
         if (asset == address(0) || asset == SENTINEL) return false;
+        if ((IBittyV1Guard(BITTY_GUARD).assetCategory(asset) & ASSET_STABLE_COIN) == 0) return false;
         address head = vaultStorage.gaslessAssets[SENTINEL];
         if (head == address(0) || head == SENTINEL) {
-            return IBittyV1Guard(BITTY_GUARD).isAssetRegistered(asset);
+            return true;
         }
         return vaultStorage.gaslessAssets[asset] != address(0);
     }

@@ -5,6 +5,7 @@ error SubVaultNotFound();
 error SubVaultImplNotRegistered();
 error NotParentVault();
 error NotSubOwner();
+error OwnershipNotRenounceable();
 error SubOwnerExpired();
 error SubOwnerExpiryInPast();
 error SubOwnerDeadlineRequired();
@@ -23,7 +24,8 @@ interface IBittyV1SubVault {
      * @param vault The parent main vault (immutable thereafter).
      * @param subOwner The delegate who operates the sub's DeFi.
      * @param allowlistEnabled Whether the guard-trust switch starts on.
-     * @param expiresAt When the sub owner's grant lapses; 0 = never.
+     * @param expiresAt When the sub owner's grant lapses. Must be a future timestamp within MAX_DURATION;
+     *        a sub-owner grant always has a deadline — 0 is rejected (SubOwnerDeadlineRequired).
      */
     function initialize(address vault, address subOwner, bool allowlistEnabled, uint64 expiresAt) external;
 
@@ -46,13 +48,16 @@ interface IBittyV1SubVault {
      * @notice Reassign the operating sub owner and their grant expiry. Parent only (1-step — the
      *         parent is the backstop).
      * @param newOwner The new sub owner.
-     * @param expiresAt When the new sub owner's grant lapses; 0 = never.
+     * @param expiresAt When the new sub owner's grant lapses. Must be a future timestamp within
+     *        MAX_DURATION; 0 is rejected (SubOwnerDeadlineRequired).
      */
     function setSubOwner(address newOwner, uint64 expiresAt) external;
 
     /**
-     * @notice Extend, shorten or lift (0) the sub owner's grant without reassigning it. Parent only.
-     * @param expiresAt When the sub owner's grant lapses; 0 = never.
+     * @notice Extend or shorten the sub owner's grant without reassigning it. Parent only. To end it now,
+     *         use {expireSubOwnerNow}.
+     * @param expiresAt When the sub owner's grant lapses. Must be a future timestamp within MAX_DURATION;
+     *        0 is rejected (SubOwnerDeadlineRequired).
      */
     function setSubOwnerExpiry(uint64 expiresAt) external;
 
@@ -80,8 +85,8 @@ interface IBittyV1SubVault {
     function subOwner() external view returns (address);
 
     /**
-     * @notice When the sub owner's grant lapses; 0 = never.
-     * @return When the sub owner's grant lapses; 0 = never.
+     * @notice When the sub owner's grant lapses — always a set future deadline (never 0).
+     * @return When the sub owner's grant lapses.
      */
     function subOwnerExpiresAt() external view returns (uint64);
 }

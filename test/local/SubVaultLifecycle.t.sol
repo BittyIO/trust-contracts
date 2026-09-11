@@ -2,6 +2,7 @@
 pragma solidity ^0.8.34;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 import {MockGuard} from "../helpers/MockGuard.sol";
@@ -26,7 +27,7 @@ contract SubVaultLifecycleTest is Test {
 
     address owner = makeAddr("owner");
     address subOwner = makeAddr("subOwner");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
 
     function setUp() public {
         vm.etch(BITTY_GUARD, address(new MockGuard()).code);
@@ -35,11 +36,39 @@ contract SubVaultLifecycleTest is Test {
         subImpl = new BittyV1SubVault(address(facet));
         vaultImpl = new BittyV1Vault(address(facet), address(subImpl));
 
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0));
         vault = BittyV1Vault(payable(new ERC1967Proxy(address(vaultImpl), init)));
 
         usdc = new MockERC20("USD Coin", "USDC", 6);
         usdc.mint(address(vault), 1_000e6);
+    }
+
+    /// A zero-amount recall entry moves nothing and must emit nothing — matching fundSubVault.
+    function test_recallDoesNotEmitForZeroAmountEntries() public {
+        vm.prank(owner);
+        (uint256 subId,) = vault.createSubVault(subOwner, false, uint64(block.timestamp) + 365 days);
+        vm.prank(owner);
+        vault.fundSubVault(subId, _one(address(usdc)), _one(600e6));
+
+        MockERC20 dai = new MockERC20("DAI", "DAI", 18);
+        address[] memory assets = new address[](2);
+        uint256[] memory amounts = new uint256[](2);
+        assets[0] = address(usdc);
+        amounts[0] = 250e6;
+        assets[1] = address(dai);
+        amounts[1] = 0; // must not emit
+
+        vm.recordLogs();
+        vm.prank(owner);
+        vault.recallFromSubVault(subId, assets, amounts);
+
+        bytes32 topic = keccak256("SubVaultRecalled(uint256,address,uint256)");
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 n;
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics.length != 0 && logs[i].topics[0] == topic) n++;
+        }
+        assertEq(n, 1, "only the non-zero leg emits SubVaultRecalled");
     }
 
     function test_createFundRecallClose() public {

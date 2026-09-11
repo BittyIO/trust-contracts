@@ -10,30 +10,30 @@ interface IGuardOwner {
 }
 
 /**
- * @title BittyV1ForwarderBootstrap
- * @notice The implementation the forwarder proxy is BORN with, and leaves in the same transaction.
+ * @title BittyV1VaultFactoryBootstrap
+ * @notice The implementation the factory proxy is BORN with, and leaves in the same transaction.
  *
- *         The forwarder is a compile-time constant in every vault, so its address moving costs a new
- *         vault implementation and a fresh deploy of the whole stack. Being born on a CONSTANT bootstrap
- *         takes the forwarder's build out of its own address: the forwarder proxy sits at one address
- *         forever, and a later change to the relay logic is an upgrade rather than a migration. It also
- *         keeps EIP-712 signatures valid, since the domain binds to the verifying contract.
+ *         The factory is the CREATE2 deployer of every vault, so its address is baked into every vault
+ *         address. If the factory were a plain contract, changing its logic would move the factory —
+ *         and relocate every owner's vault. Being born on a CONSTANT bootstrap takes the factory's build
+ *         out of its own address: the factory proxy sits at one address forever, and new factory logic
+ *         is an upgrade rather than a new deployment, so vault addresses survive every future version.
  *
  * @dev DELIBERATELY self-contained: it imports nothing project-local. The guard address and owner key
  *      are literals, and the guard is reached through a minimal in-file interface — so neither
  *      {Constants} nor {IBittyV1Guard} is in this contract's metadata source set. A bootstrap's address
  *      is the hash of its whole init code (including that metadata), so this is what guarantees the
  *      address is unchanged as long as THIS file (and OpenZeppelin) is unchanged, no matter what the
- *      rest of the codebase does. The same reasoning as BittyV1VaultBootstrap.
+ *      rest of the codebase does. The same reasoning as BittyV1VaultBootstrap / BittyV1ForwarderBootstrap.
  */
-contract BittyV1ForwarderBootstrap is UUPSUpgradeable {
+contract BittyV1VaultFactoryBootstrap is UUPSUpgradeable {
     address private constant GUARD = 0x00006Dc0000DBB00d9bd462ad2005E20007e0Dc7;
     bytes32 private constant OWNER_KEY = keccak256("bitty.owner");
 
     /**
-     * @dev Gated on the guard's configured owner: the proxy address is reproducible on every chain, so
-     *      anyone could otherwise race the deploy on a chain Bitty has not reached yet and hand the
-     *      forwarder an implementation of their own. An unconfigured guard (owner 0) fails closed.
+     * @dev Only the Bitty owner may perform the first upgrade off the bootstrap; the factory's own owner
+     *      (the same guard value) takes over the moment this contract stops being the implementation. An
+     *      unconfigured guard (owner 0) fails closed — no upgrade at all.
      */
     function _authorizeUpgrade(address) internal view override {
         if (msg.sender != IGuardOwner(GUARD).getAddress(OWNER_KEY)) revert NotOwner();

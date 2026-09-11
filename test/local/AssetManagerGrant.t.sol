@@ -49,7 +49,7 @@ contract AssetManagerGrantTest is Test {
     address manager = makeAddr("assetManager");
     address other = makeAddr("otherManager");
     address stranger = makeAddr("stranger");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
 
     uint256 constant UNCHANGED = type(uint256).max;
 
@@ -61,7 +61,7 @@ contract AssetManagerGrantTest is Test {
         BittyV1VaultDeFiFacet facet = new BittyV1VaultDeFiFacet();
         BittyV1SubVault subImpl = new BittyV1SubVault(address(facet));
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(subImpl));
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0));
         vault = BittyV1Vault(payable(new ERC1967Proxy(address(impl), init)));
 
         usdc = new MockERC20("USD Coin", "USDC", 6);

@@ -87,7 +87,7 @@ struct DeFiStorage {
     bool allowlistEnabled;
     uint64 allowlistDisableAt;
     uint64 tradeDisabledUntilTimestamp;
-    mapping(address => address) clonedProtocols;
+    mapping(bytes32 => address) clonedProtocols;
     mapping(address => address) autoYieldProtocols;
     mapping(address => bool) assets;
     mapping(address => bool) protocols;
@@ -100,7 +100,7 @@ struct DeFiStorage {
 }
 
 struct VaultStorage {
-    address weth;
+    address gasWrapped;
     bool isInitialized;
     bool renounced;
 
@@ -134,8 +134,6 @@ struct VaultStorage {
 
 struct SubVaultStorage {
     address vault;
-    address subOwner;
-    bool isInitialized;
     bool gaslessEnabled;
     uint64 gasDailyLimit;
     uint64 maxFeePerOp;

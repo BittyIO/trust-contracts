@@ -19,8 +19,8 @@ import {BITTY_GUARD} from "../../src/logic/Constants.sol";
  * an ERC-1967 proxy would have done. Every call here runs the library against genuinely blank storage.
  */
 contract UninitializedAccount {
-    function initPayments(address weth) external {
-        PaymentLogic.initialize(weth);
+    function initPayments(address gasWrapped) external {
+        PaymentLogic.initialize(gasWrapped);
     }
 
     function initDeFi(bool allowlistEnabled) external {
@@ -88,7 +88,7 @@ contract UninitializedAccount {
 contract LogicGuardsTest is Test {
     UninitializedAccount account;
 
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
     address payee = makeAddr("payee");
     address asset = makeAddr("asset");
 
@@ -192,9 +192,9 @@ contract LogicGuardsTest is Test {
     // ── and neither half initializes twice ────────────────────────────────────
 
     function test_paymentsInitializeExactlyOnce() public {
-        account.initPayments(weth);
+        account.initPayments(gasWrapped);
         vm.expectRevert(AlreadyInitialized.selector);
-        account.initPayments(weth);
+        account.initPayments(gasWrapped);
     }
 
     function test_defiInitializesExactlyOnce() public {
@@ -204,7 +204,7 @@ contract LogicGuardsTest is Test {
     }
 
     function test_initializingOneHalfDoesNotUnlockTheOther() public {
-        account.initPayments(weth);
+        account.initPayments(gasWrapped);
         vm.expectRevert(NotInitialized.selector);
         account.enableAllowlist();
     }

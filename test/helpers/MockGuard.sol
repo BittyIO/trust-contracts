@@ -10,9 +10,15 @@ contract MockGuard {
     // Keyed by category, like the guard: the two are separate registries so a sub vault cannot be
     // pointed at main-vault code.
     mapping(uint8 => mapping(address => bool)) internal _registered;
+    mapping(uint8 category => address) public latestImplementation;
 
     function isImplementationRegisteredFor(address impl, uint8 category) external view returns (bool) {
         return _registered[category][impl];
+    }
+
+    function setLatestImpl(uint8 category, address impl) external {
+        latestImplementation[category] = impl;
+        _registered[category][impl] = true;
     }
     mapping(address => uint8) public assetCategory;
     mapping(address => uint8) public protocolCategory;
@@ -68,5 +74,17 @@ contract MockGuard {
             _deprecated.pop();
             return;
         }
+    }
+
+    // ── config map (public mappings auto-generate getAddress(bytes32)/getUint(bytes32)) ──
+    mapping(bytes32 => address) public getAddress;
+    mapping(bytes32 => uint256) public getUint;
+
+    function setConfigAddress(bytes32 key, address value) external {
+        getAddress[key] = value;
+    }
+
+    function setConfigUint(bytes32 key, uint256 value) external {
+        getUint[key] = value;
     }
 }

@@ -3,6 +3,8 @@ pragma solidity ^0.8.34;
 
 import {Test} from "forge-std/Test.sol";
 import {BittyV1AutoYieldKeeper} from "../../src/BittyV1AutoYieldKeeper.sol";
+import {MockGuard} from "../helpers/MockGuard.sol";
+import {BITTY_GUARD, CFG_OWNER} from "../../src/logic/Constants.sol";
 
 /**
  * The keeper is an IDENTITY, not an actor: vaults name one immutable address as their auto-yield
@@ -22,7 +24,9 @@ contract KeeperTest is Test {
 
     function setUp() public {
         signer = vm.addr(signerPk);
-        keeper = new BittyV1AutoYieldKeeper(kOwner);
+        vm.etch(BITTY_GUARD, address(new MockGuard()).code);
+        MockGuard(BITTY_GUARD).setConfigAddress(CFG_OWNER, kOwner);
+        keeper = new BittyV1AutoYieldKeeper();
         vm.startPrank(kOwner);
         keeper.setForwarder(forwarder, true);
         keeper.setSigner(signer, uint64(block.timestamp + 30 days));
@@ -141,20 +145,12 @@ contract KeeperTest is Test {
         keeper.setSigner(stranger, uint64(block.timestamp + 1 days));
         vm.expectRevert(BittyV1AutoYieldKeeper.NotOwner.selector);
         keeper.setForwarder(stranger, true);
-        vm.expectRevert(BittyV1AutoYieldKeeper.NotOwner.selector);
-        keeper.transferOwnership(stranger);
         vm.stopPrank();
     }
 
-    function test_ownerCannotBeZero() public {
-        vm.prank(kOwner);
-        vm.expectRevert(BittyV1AutoYieldKeeper.AddressZero.selector);
-        keeper.transferOwnership(address(0));
-    }
-
-    function test_theKeeperCannotBeDeployedOwnerless() public {
-        vm.expectRevert(BittyV1AutoYieldKeeper.AddressZero.selector);
-        new BittyV1AutoYieldKeeper(address(0));
+    /// With no constructor argument the keeper's address is bytecode-only; its owner comes from the guard.
+    function test_ownerIsTheGuardConfiguredOwner() public view {
+        assertEq(keeper.owner(), kOwner, "owner is read from the guard config");
     }
 
     /**
@@ -188,18 +184,20 @@ contract KeeperTest is Test {
         assertEq(inner.length, 0, "and no body");
     }
 
-    /// Rotating the keeper's own owner: the signer registry and forwarder trust survive, because they
-    /// are the keeper's state, not the owner's — a rotation must not strand every vault pointing here.
-    function test_ownershipRotatesAndCarriesTheSignerRegistryWithIt() public {
+    /**
+     * @dev Rotating the Bitty owner in the guard rotates every keeper's admin at once; the signer
+     *      registry and forwarder trust survive, because they are the keeper's state, not the owner's —
+     *      a rotation must not strand every vault pointing here.
+     */
+    function test_rotatingTheGuardOwnerRotatesTheKeeperAdmin() public {
         address newOwner = makeAddr("newKeeperOwner");
         bytes32 h = keccak256("sweep");
         assertEq(_ask(h, _payload(signerPk, h, signer)), MAGIC, "signing works before the rotation");
 
-        vm.prank(kOwner);
-        keeper.transferOwnership(newOwner);
-        assertEq(keeper.owner(), newOwner, "rotated");
+        MockGuard(BITTY_GUARD).setConfigAddress(CFG_OWNER, newOwner);
+        assertEq(keeper.owner(), newOwner, "keeper follows the guard owner");
 
-        assertEq(_ask(h, _payload(signerPk, h, signer)), MAGIC, "and the registry came with it");
+        assertEq(_ask(h, _payload(signerPk, h, signer)), MAGIC, "and the registry is unchanged");
 
         vm.prank(kOwner);
         vm.expectRevert(BittyV1AutoYieldKeeper.NotOwner.selector);

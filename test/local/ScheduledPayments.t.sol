@@ -46,7 +46,7 @@ contract ScheduledPaymentsTest is Test {
     address operator = makeAddr("operator");
     address payee = makeAddr("payee");
     address trigger = makeAddr("trigger");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
 
     uint256 constant UNCHANGED = type(uint256).max;
     uint256 constant UNLIMITED = type(uint256).max;
@@ -58,7 +58,7 @@ contract ScheduledPaymentsTest is Test {
         BittyV1VaultDeFiFacet facet = new BittyV1VaultDeFiFacet();
         BittyV1SubVault subImpl = new BittyV1SubVault(address(facet));
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(subImpl));
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0));
         vault = BittyV1Vault(payable(new ERC1967Proxy(address(impl), init)));
 
         usdc = new MockERC20("USD Coin", "USDC", 6);
@@ -210,6 +210,28 @@ contract ScheduledPaymentsTest is Test {
         assertEq(usdc.balanceOf(payee), 20e6, "both payments survived the skip");
     }
 
+    /// A griefer can't bypass the empty-vault skip by passing bogus withdrawProtocols to burn slots:
+    /// a zero-delivery pay now reverts (rolling back the accrual) instead of consuming a payment.
+    function test_bogusProtocolsCannotBurnASlot() public {
+        IBittyV1Vault.ScheduledPayment memory sp = _sp(2, address(0), 10e6, block.timestamp, 0);
+        sp.payWithInsufficientBalance = true;
+        uint256 id = _add(sp);
+
+        vm.prank(address(vault));
+        usdc.transfer(makeAddr("elsewhere"), 1_000e6); // drain the vault
+
+        address[] memory bogus = new address[](1); // [address(0)] flips the fromPosition flag
+        vm.prank(makeAddr("griefer"));
+        vm.expectRevert(InsufficientBalance.selector);
+        vault.payScheduled(id, bogus);
+
+        // Neither payment slot was consumed.
+        usdc.mint(address(vault), 100e6);
+        _pay(id, owner);
+        _pay(id, owner);
+        assertEq(usdc.balanceOf(payee), 20e6, "both payments survived the grief attempt");
+    }
+
     // ── proposals and approval ────────────────────────────────────────────────
 
     function test_operatorProposalIsUnpayableUntilApproved() public {
@@ -284,17 +306,17 @@ contract ScheduledPaymentsTest is Test {
         uint256 id = _add(_sp(1, address(0), 10e6, block.timestamp, 0));
         vm.prank(owner);
         vm.expectRevert(PayScheduledPaymentAmountTriggerEmpty.selector);
-        vault.payScheduledAmount(id, 1e6);
+        vault.payScheduledAmount(id, 1e6, new address[](0));
     }
 
     function test_payScheduledAmountIsCappedByTheSchedule() public {
         uint256 id = _add(_sp(1, trigger, 10e6, block.timestamp, 0));
         vm.prank(trigger);
         vm.expectRevert(PayMoreThanScheduledPaymentAmount.selector);
-        vault.payScheduledAmount(id, 11e6);
+        vault.payScheduledAmount(id, 11e6, new address[](0));
 
         vm.prank(trigger);
-        vault.payScheduledAmount(id, 4e6);
+        vault.payScheduledAmount(id, 4e6, new address[](0));
         assertEq(usdc.balanceOf(payee), 4e6, "less than the schedule is fine");
     }
 

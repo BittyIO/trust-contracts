@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity ^0.8.34;
 
-import {ASSET_STABLE_COIN} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
+import {ASSET_STABLE_COIN, ASSET_CRYPTO} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
@@ -36,7 +36,7 @@ contract SubVaultGaslessTest is Test {
 
     address owner = makeAddr("owner");
     address subOwner = makeAddr("subOwner");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
     uint256 subId;
 
     function setUp() public {
@@ -48,7 +48,8 @@ contract SubVaultGaslessTest is Test {
         BittyV1Vault vaultImpl = new BittyV1Vault(address(facet), address(subImpl));
         vault = BittyV1Vault(
             payable(new ERC1967Proxy(
-                    address(vaultImpl), abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0))
+                    address(vaultImpl),
+                    abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0))
                 ))
         );
 
@@ -101,6 +102,37 @@ contract SubVaultGaslessTest is Test {
         vm.prank(BITTY_FORWARDER);
         vm.expectRevert(InvalidAsset.selector);
         sub.payRelayerFee(address(notStable), 1e6);
+    }
+
+    /// v1.0.1 bitmask: an asset carrying the stable-coin flag ALONGSIDE another category
+    /// (ASSET_STABLE_COIN | ASSET_CRYPTO) is still a valid gas asset — the check tests the bit,
+    /// not equality. Under the old `!= ASSET_STABLE_COIN` this would have wrongly reverted.
+    function test_multiCategoryStablecoinAccepted() public {
+        vm.prank(owner);
+        vault.setSubVaultGasless(subId, true);
+        MockERC20 multi = new MockERC20("USDX", "USDX", 6);
+        MockGuard(BITTY_GUARD).setAsset(address(multi), ASSET_STABLE_COIN | ASSET_CRYPTO);
+        multi.mint(address(sub), 100e6);
+
+        vm.prank(BITTY_FORWARDER);
+        sub.payRelayerFee(address(multi), 5e6);
+
+        assertEq(multi.balanceOf(BITTY_FEE_COLLECTOR), 5e6, "multi-category stablecoin charged");
+        assertEq(multi.balanceOf(address(sub)), 95e6, "sub paid its own fee");
+    }
+
+    /// The other side of the bit test: an asset with a category mask that does NOT include the
+    /// stable-coin bit (crypto-only) is still rejected.
+    function test_cryptoOnlyAssetRejected() public {
+        vm.prank(owner);
+        vault.setSubVaultGasless(subId, true);
+        MockERC20 crypto = new MockERC20("ARB", "ARB", 18);
+        MockGuard(BITTY_GUARD).setAsset(address(crypto), ASSET_CRYPTO); // registered, but not a stablecoin
+        crypto.mint(address(sub), 10e18);
+
+        vm.prank(BITTY_FORWARDER);
+        vm.expectRevert(InvalidAsset.selector);
+        sub.payRelayerFee(address(crypto), 1e18);
     }
 
     function test_gasBudgetRemaining_tracksSwitchAndSpend() public {

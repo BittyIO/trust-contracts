@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity ^0.8.34;
 
-import {ASSET_STABLE_COIN} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
+import {ASSET_STABLE_COIN, ASSET_CRYPTO} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
@@ -15,7 +15,6 @@ import {IBittyV1Vault} from "../../src/interfaces/IBittyV1Vault.sol";
 import {
     AddressZero,
     ArrayLengthMismatch,
-    AssetNotRegistered,
     FeeExceedsPerOpCap,
     InsufficientBalance,
     InvalidAsset,
@@ -56,6 +55,14 @@ contract WETHStub {
     receive() external payable {}
 }
 
+/// A second lending adapter with a DISTINCT lineage, so it is a separate position from `proto`.
+/// (Two adapters of the same lineage share one instance — that is the point of lineage keying.)
+contract EmptyLendingProtocol is MockLendingProtocol {
+    function protocolLineage() external pure override returns (bytes32) {
+        return keccak256("bitty.mock.lending.empty");
+    }
+}
+
 /**
  * The vault's own entry points: what it validates before delegating to a logic library.
  *
@@ -71,7 +78,7 @@ contract VaultEntrypointsTest is Test {
     MockGuard guard;
     MockERC20 usdc;
     MockLendingProtocol proto;
-    WETHStub weth;
+    WETHStub gasWrapped;
 
     address owner = makeAddr("owner");
     address operator = makeAddr("operator");
@@ -82,7 +89,7 @@ contract VaultEntrypointsTest is Test {
         vm.etch(BITTY_GUARD, address(new MockGuard()).code);
         guard = MockGuard(BITTY_GUARD);
 
-        weth = new WETHStub();
+        gasWrapped = new WETHStub();
         facet = new BittyV1VaultDeFiFacet();
         BittyV1SubVault subImpl = new BittyV1SubVault(address(facet));
         impl = new BittyV1Vault(address(facet), address(subImpl));
@@ -103,7 +110,7 @@ contract VaultEntrypointsTest is Test {
         returns (BittyV1Vault v)
     {
         bytes memory init = abi.encodeCall(
-            BittyV1Vault.initialize, (owner, address(weth), false, activationAsset, activationAmount)
+            BittyV1Vault.initialize, (owner, address(gasWrapped), false, activationAsset, activationAmount)
         );
         v = BittyV1Vault(payable(new ERC1967Proxy{value: value}(address(impl), init)));
     }
@@ -144,7 +151,8 @@ contract VaultEntrypointsTest is Test {
     // ── initialize ────────────────────────────────────────────────────────────
 
     function test_aVaultCannotBeBornOwnerless() public {
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (address(0), address(weth), false, address(0), 0));
+        bytes memory init =
+            abi.encodeCall(BittyV1Vault.initialize, (address(0), address(gasWrapped), false, address(0), 0));
         vm.expectRevert(AddressZero.selector);
         new ERC1967Proxy(address(impl), init);
     }
@@ -166,7 +174,7 @@ contract VaultEntrypointsTest is Test {
 
         BittyV1Vault v = _newVault(0, address(0), 0);
         assertEq(address(v), predicted, "the vault landed where the ETH was waiting");
-        assertEq(weth.balanceOf(address(v)), 2 ether, "the vault holds WETH, never loose ETH");
+        assertEq(gasWrapped.balanceOf(address(v)), 2 ether, "the vault holds WETH, never loose ETH");
         assertEq(address(v).balance, 0, "and nothing was left unwrapped");
     }
 
@@ -186,8 +194,15 @@ contract VaultEntrypointsTest is Test {
 
     function test_anUnregisteredActivationAssetIsRefused() public {
         MockERC20 fee = new MockERC20("Random", "RND", 6);
-        vm.expectRevert(AssetNotRegistered.selector);
+        vm.expectRevert(InvalidAsset.selector);
         _newVault(0, address(fee), 1e6);
+    }
+
+    function test_aCryptoActivationAssetIsRefused() public {
+        MockERC20 gasWrapped = new MockERC20("WETH", "WETH", 18);
+        guard.setAsset(address(gasWrapped), ASSET_CRYPTO);
+        vm.expectRevert(InvalidAsset.selector);
+        _newVault(0, address(gasWrapped), 1e18);
     }
 
     function test_anActivationFeeAboveTheSystemCapIsRefused() public {
@@ -371,7 +386,7 @@ contract VaultEntrypointsTest is Test {
     /// A protocol the vault HAS used but has since emptied is skipped without a withdraw call, so a
     /// caller cannot pad the cover list with drained positions to burn the payer's gas.
     function test_aPositionWithNothingInItIsSkipped() public {
-        MockLendingProtocol empty = new MockLendingProtocol();
+        EmptyLendingProtocol empty = new EmptyLendingProtocol();
         guard.setProtocol(address(empty), LENDING_ID);
 
         vm.startPrank(owner);
@@ -392,6 +407,32 @@ contract VaultEntrypointsTest is Test {
         assertEq(usdc.balanceOf(payee), 200e6, "the empty one contributed nothing, the real one covered it");
     }
 
+    /// payScheduledAmount can now source a partial payment from a yield position, not just liquid balance.
+    function test_triggerPaysAPartialAmountFromAPosition() public {
+        address trigger = makeAddr("trigger");
+        vm.prank(owner);
+        IFacet(address(vault)).deposit(address(proto), address(usdc), 950e6); // vault liquid now 50e6
+
+        IBittyV1Vault.ScheduledPayment memory sp = IBittyV1Vault.ScheduledPayment({
+            recipient: payee,
+            remainingPaymentCount: 2,
+            isImmutable: false,
+            payWithInsufficientBalance: false,
+            trigger: trigger,
+            assetAddress: address(usdc),
+            amount: 500e6,
+            startTimestamp: block.timestamp,
+            paymentInterval: 0
+        });
+        vm.prank(owner);
+        uint256 id = vault.addScheduledPayment(sp);
+
+        // Pay 300 (< the 500 scheduled): 50 from liquid + 250 pulled from the position.
+        vm.prank(trigger);
+        vault.payScheduledAmount(id, 300e6, _addr(address(proto)));
+        assertEq(usdc.balanceOf(payee), 300e6, "partial amount, topped up from the yield position");
+    }
+
     function _f2() internal view returns (IFacet) {
         return IFacet(address(vault));
     }
@@ -401,8 +442,16 @@ contract VaultEntrypointsTest is Test {
     function test_narrowingToAnUnregisteredCoinIsRefused() public {
         MockERC20 rnd = new MockERC20("Random", "RND", 18);
         vm.prank(owner);
-        vm.expectRevert(AssetNotRegistered.selector);
+        vm.expectRevert(InvalidAsset.selector);
         vault.setGasless(_addr(address(rnd)), 50, 5);
+    }
+
+    function test_narrowingToACryptoCoinIsRefused() public {
+        MockERC20 gasWrapped = new MockERC20("WETH", "WETH", 18);
+        guard.setAsset(address(gasWrapped), ASSET_CRYPTO);
+        vm.prank(owner);
+        vm.expectRevert(InvalidAsset.selector);
+        vault.setGasless(_addr(address(gasWrapped)), 50, 5);
     }
 
     function test_aRepeatedCoinIsStoredOnce() public {
@@ -476,15 +525,16 @@ contract VaultEntrypointsTest is Test {
         MockERC20 coin = new MockERC20("USD Coin", "USDC", 6);
         guard.setAsset(address(coin), ASSET_STABLE_COIN);
         // Seeding defers to the guard, so the stub has to be registered there like the real WETH is.
-        guard.setAsset(address(weth), 2); // 2 = crypto asset, as the live guard categorises WETH
+        guard.setAsset(address(gasWrapped), 2); // 2 = crypto asset, as the live guard categorises WETH
 
         // Allowlist ON, exactly as the factory activates a vault.
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, address(weth), true, address(coin), 0));
+        bytes memory init =
+            abi.encodeCall(BittyV1Vault.initialize, (owner, address(gasWrapped), true, address(coin), 0));
         BittyV1Vault v = BittyV1Vault(payable(new ERC1967Proxy(address(impl), init)));
 
         assertTrue(IFacetView(address(v)).allowlistEnabled(), "allowlist should be on");
         assertTrue(IFacetView(address(v)).isAssetAllowed(address(coin)), "activation asset not listed");
-        assertTrue(IFacetView(address(v)).isAssetAllowed(address(weth)), "weth not listed");
+        assertTrue(IFacetView(address(v)).isAssetAllowed(address(gasWrapped)), "gasWrapped not listed");
     }
 
     /// Seeding is a convenience: an unreachable guard must never block vault creation.
@@ -499,9 +549,10 @@ contract VaultEntrypointsTest is Test {
     function test_noSeedingWhenTheAllowlistIsOff() public {
         MockERC20 coin = new MockERC20("USD Coin", "USDC", 6);
         guard.setAsset(address(coin), ASSET_STABLE_COIN);
-        guard.setAsset(address(weth), 2);
+        guard.setAsset(address(gasWrapped), 2);
 
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, address(weth), false, address(coin), 0));
+        bytes memory init =
+            abi.encodeCall(BittyV1Vault.initialize, (owner, address(gasWrapped), false, address(coin), 0));
         BittyV1Vault v = BittyV1Vault(payable(new ERC1967Proxy(address(impl), init)));
 
         assertFalse(IFacetView(address(v)).allowlistEnabled(), "allowlist should be off");

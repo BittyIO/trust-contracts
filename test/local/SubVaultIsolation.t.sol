@@ -8,6 +8,13 @@ import {BittyV1VaultDeFiFacet} from "../../src/BittyV1VaultDeFiFacet.sol";
 import {BittyV1SubVault} from "../../src/subvault/BittyV1SubVault.sol";
 import {IBittyV1SubVault, NotParentVault, NotSubOwner} from "../../src/interfaces/IBittyV1SubVault.sol";
 
+/// Minimal stand-in for the parent main vault: a sub reads `gasWrappedAddress()` off its parent at init.
+contract MockParent {
+    function gasWrappedAddress() external pure returns (address) {
+        return address(0xEEeE); // isolation tests never send ETH to the sub, so any non-zero value works
+    }
+}
+
 /**
  * The payout-monopoly invariant, enforced structurally: a sub vault's only asset exits are `recall`
  * (parent-only) and `returnToVault` (sub-owner, to the parent). There is no function that sends to an
@@ -19,12 +26,13 @@ contract SubVaultIsolationTest is Test {
     BittyV1SubVault subImpl;
     address subVault;
 
-    address parent = makeAddr("parent");
+    address parent;
     address subOwner = makeAddr("subOwner");
     address attacker = makeAddr("attacker");
     MockERC20 usdc;
 
     function setUp() public {
+        parent = address(new MockParent());
         facet = new BittyV1VaultDeFiFacet();
         subImpl = new BittyV1SubVault(address(facet));
         subVault = address(

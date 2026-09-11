@@ -4,6 +4,7 @@ pragma solidity ^0.8.34;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MockGuard} from "../helpers/MockGuard.sol";
+import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 import {BittyV1VaultDeFiFacet} from "../../src/BittyV1VaultDeFiFacet.sol";
 import {BittyV1Vault} from "../../src/BittyV1Vault.sol";
 import {BittyV1SubVault} from "../../src/subvault/BittyV1SubVault.sol";
@@ -33,7 +34,7 @@ contract OffchainAuthTest is Test {
     address owner = makeAddr("owner");
     address subOwner = makeAddr("subOwner");
     address stranger = makeAddr("stranger");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
     address sell = makeAddr("sell");
     address buy = makeAddr("buy");
 
@@ -42,7 +43,7 @@ contract OffchainAuthTest is Test {
         facet = new BittyV1VaultDeFiFacet();
         subImpl = new BittyV1SubVault(address(facet));
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(subImpl));
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0));
         vault = BittyV1Vault(payable(new ERC1967Proxy(address(impl), init)));
     }
 
@@ -79,5 +80,21 @@ contract OffchainAuthTest is Test {
 
         assertTrue(sub.isOffchainCancellationAuthorized(subOwner), "the sub's own owner may cancel");
         assertFalse(sub.isOffchainCancellationAuthorized(owner), "the main owner is not the sub's owner");
+    }
+
+    /// A lapsed sub owner can no longer place off-chain orders, but may still cancel the ones it signed.
+    function test_expiredSubOwnerCannotPlaceButMayStillCancel() public {
+        address sellTok = address(new MockERC20("Sell", "SELL", 18));
+        MockGuard(BITTY_GUARD).setAsset(buy, 2); // buyToken must be guard-listed
+        uint64 expiry = uint64(block.timestamp) + 10 days;
+        vm.prank(owner);
+        (, address account) = vault.createSubVault(subOwner, false, expiry);
+        IOffchainAuth sub = IOffchainAuth(account);
+
+        assertTrue(sub.isOffchainOrderAuthorized(subOwner, sellTok, buy, 0), "authorized before expiry");
+
+        vm.warp(expiry);
+        assertFalse(sub.isOffchainOrderAuthorized(subOwner, sellTok, buy, 0), "no placing after expiry");
+        assertTrue(sub.isOffchainCancellationAuthorized(subOwner), "but cancelling stays open");
     }
 }

@@ -127,7 +127,7 @@ contract ProtocolUpgradeTest is Test {
 
     address owner = makeAddr("owner");
     address stranger = makeAddr("stranger");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
 
     function setUp() public {
         vm.etch(BITTY_GUARD, address(new MockGuard()).code);
@@ -138,7 +138,7 @@ contract ProtocolUpgradeTest is Test {
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(subImpl));
         vault = BittyV1Vault(
             payable(new ERC1967Proxy(
-                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0))
+                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0))
                 ))
         );
 
@@ -203,9 +203,31 @@ contract ProtocolUpgradeTest is Test {
     }
 
     function test_upgradingNeverUsedProtocolReverts() public {
+        // A DISTINCT lineage the vault holds no instance of — there is nothing to repoint. (Upgrading
+        // v2 would NOT revert: it shares v1's lineage, and v1 was deposited, so the instance exists and
+        // upgrading it in place is exactly the point — see the consolidation test below.)
+        ForeignLendingAdapter fresh = new ForeignLendingAdapter();
+        guard.setProtocol(address(fresh), LENDING_ID);
         vm.prank(owner);
         vm.expectRevert(ProtocolNotInstantiated.selector);
-        _f().upgradeProtocol(address(v2), address(v2));
+        _f().upgradeProtocol(address(fresh), address(fresh));
+    }
+
+    function test_upgradeConsolidatesTheLineagePosition() public {
+        // The vault deposited into v1 in setUp. After upgrading that instance to v2 (same lineage,
+        // higher version), a deposit naming v2 must land on the SAME instance holding the position —
+        // not spin up a fresh one. This is the whole reason instances are keyed by lineage.
+        address instance = _f().getClone(address(v1));
+        assertTrue(instance != address(0), "v1 instance exists after setUp");
+
+        vm.startPrank(owner);
+        _f().upgradeProtocol(address(v1), address(v2));
+        _f().deposit(address(v2), address(usdc), 50e6);
+        vm.stopPrank();
+
+        assertEq(_f().getClone(address(v2)), instance, "v2 resolves to the same upgraded instance");
+        assertEq(_f().getClone(address(v1)), instance, "v1 still resolves to it too (same lineage)");
+        assertEq(IBittyV1Yield(instance).getBalance(address(usdc)), 150e6, "both deposits are in one position");
     }
 
     /// Adapter instances are only ever reachable through the vault that owns them.

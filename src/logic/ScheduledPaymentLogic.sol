@@ -213,7 +213,7 @@ library ScheduledPaymentLogic {
         }
         recipient = sp.recipient;
         asset = sp.assetAddress;
-        payoutToken = asset == address(0) ? vaultStorage.weth : asset;
+        payoutToken = asset == address(0) ? vaultStorage.gasWrapped : asset;
         needed = sp.amount;
         have = IERC20(payoutToken).balanceOf(address(this));
         allowPartial = sp.payWithInsufficientBalance;
@@ -224,46 +224,35 @@ library ScheduledPaymentLogic {
         PaymentCore.payOut(BittyStorage.vault(), asset, amount, recipient);
     }
 
-    function payScheduledAmount(uint256 id, uint256 amount, address sender) external {
-        VaultStorage storage vaultStorage = BittyStorage.vault();
-        PaymentCore.onlyInitialized(vaultStorage);
-        IBittyV1Vault.ScheduledPayment storage scheduledPayment = vaultStorage.scheduledPayments[id];
-        if (scheduledPayment.amount < amount) revert PayMoreThanScheduledPaymentAmount();
-        if (scheduledPayment.trigger == address(0)) revert PayScheduledPaymentAmountTriggerEmpty();
-        if (sender != scheduledPayment.trigger) revert ScheduledPaymentTriggerError();
-        (bool skipped, address addr, address asset, uint256 paid, uint256 count) =
-            _payScheduled(vaultStorage, scheduledPayment, id, amount);
-        if (!skipped) emit IBittyV1Vault.ScheduledPaymentPaid(id, addr, asset, paid, count);
-    }
-
-    function _payScheduled(
-        VaultStorage storage vaultStorage,
-        IBittyV1Vault.ScheduledPayment storage scheduledPayment,
-        uint256 id,
-        uint256 payAmount
-    )
-        private
+    function accrueScheduledAmount(uint256 id, uint256 amount, address sender, bool hasProtocols)
+        external
         returns (
             bool skipped,
             address recipient,
-            address assetAddress,
-            uint256 paidAmount,
-            uint256 remainingPaymentCount
+            address asset,
+            address payoutToken,
+            uint256 target,
+            uint256 have,
+            bool allowPartial,
+            uint256 count
         )
     {
-        if (_accrueScheduledPayment(vaultStorage, scheduledPayment, id, false)) {
-            return (true, address(0), address(0), 0, 0);
+        VaultStorage storage vaultStorage = BittyStorage.vault();
+        PaymentCore.onlyInitialized(vaultStorage);
+        IBittyV1Vault.ScheduledPayment storage sp = vaultStorage.scheduledPayments[id];
+        if (sp.amount < amount) revert PayMoreThanScheduledPaymentAmount();
+        if (sp.trigger == address(0)) revert PayScheduledPaymentAmountTriggerEmpty();
+        if (sender != sp.trigger) revert ScheduledPaymentTriggerError();
+        if (_accrueScheduledPayment(vaultStorage, sp, id, hasProtocols)) {
+            return (true, address(0), address(0), address(0), 0, 0, false, 0);
         }
-        paidAmount = PaymentCore.transferMoney(
-            vaultStorage,
-            scheduledPayment.assetAddress,
-            payAmount,
-            scheduledPayment.recipient,
-            scheduledPayment.payWithInsufficientBalance
-        );
-        recipient = scheduledPayment.recipient;
-        assetAddress = scheduledPayment.assetAddress;
-        remainingPaymentCount = scheduledPayment.remainingPaymentCount;
+        recipient = sp.recipient;
+        asset = sp.assetAddress;
+        payoutToken = asset == address(0) ? vaultStorage.gasWrapped : asset;
+        target = amount;
+        have = IERC20(payoutToken).balanceOf(address(this));
+        allowPartial = sp.payWithInsufficientBalance;
+        count = sp.remainingPaymentCount;
     }
 
     function _accrueScheduledPayment(
@@ -287,7 +276,7 @@ library ScheduledPaymentLogic {
 
         if (!fromPosition && scheduledPayment.payWithInsufficientBalance) {
             address balanceToken =
-                scheduledPayment.assetAddress == address(0) ? vaultStorage.weth : scheduledPayment.assetAddress;
+                scheduledPayment.assetAddress == address(0) ? vaultStorage.gasWrapped : scheduledPayment.assetAddress;
             if (IERC20(balanceToken).balanceOf(address(this)) == 0) return true;
         }
 

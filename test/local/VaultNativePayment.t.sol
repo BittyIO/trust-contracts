@@ -15,24 +15,25 @@ import {IBittyV1Vault} from "../../src/interfaces/IBittyV1Vault.sol";
 contract VaultNativePaymentTest is Test {
     BittyV1VaultDeFiFacet facet;
     BittyV1Vault vault;
-    WETH weth;
+    WETH gasWrapped;
 
     address owner = makeAddr("owner");
     address payee = makeAddr("payee");
 
     function setUp() public {
         facet = new BittyV1VaultDeFiFacet();
-        weth = new WETH();
+        gasWrapped = new WETH();
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(0));
         vault = BittyV1Vault(
             payable(new ERC1967Proxy(
-                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (owner, address(weth), false, address(0), 0))
+                    address(impl),
+                    abi.encodeCall(BittyV1Vault.initialize, (owner, address(gasWrapped), false, address(0), 0))
                 ))
         );
         // Back the vault with real WETH (WETH contract holds the ETH, so it can be unwrapped later).
         vm.deal(address(this), 5 ether);
-        weth.deposit{value: 5 ether}();
-        weth.transfer(address(vault), 5 ether);
+        gasWrapped.deposit{value: 5 ether}();
+        gasWrapped.transfer(address(vault), 5 ether);
     }
 
     function test_nativeScheduledPaymentDeliversRealEth() public {
@@ -55,7 +56,7 @@ contract VaultNativePaymentTest is Test {
         vault.payScheduled(id, new address[](0));
 
         assertEq(payee.balance - balBefore, 1 ether, "payee received real ETH, not WETH");
-        assertEq(weth.balanceOf(payee), 0, "no WETH landed on the payee");
-        assertEq(weth.balanceOf(address(vault)), 4 ether, "vault WETH reduced by the payout");
+        assertEq(gasWrapped.balanceOf(payee), 0, "no WETH landed on the payee");
+        assertEq(gasWrapped.balanceOf(address(vault)), 4 ether, "vault WETH reduced by the payout");
     }
 }

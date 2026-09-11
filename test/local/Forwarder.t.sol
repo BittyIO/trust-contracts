@@ -12,10 +12,10 @@ import {BittyV1Vault} from "../../src/BittyV1Vault.sol";
 import {BittyV1SubVault} from "../../src/subvault/BittyV1SubVault.sol";
 import {BittyV1VaultForwarder} from "../../src/BittyV1VaultForwarder.sol";
 import {IBittyV1Owner} from "../../src/interfaces/IBittyV1Owner.sol";
-import {BITTY_GUARD, BITTY_FORWARDER, BITTY_FEE_COLLECTOR} from "../../src/logic/Constants.sol";
+import {BITTY_GUARD, BITTY_FORWARDER, BITTY_FEE_COLLECTOR, CFG_OWNER} from "../../src/logic/Constants.sol";
 
 /// Answers ERC-1271 for one key, so a contract-owned vault can be relayed.
-import {BittyV1ForwarderBootstrap, NotDeployer as BootstrapNotDeployer} from "../../src/BittyV1ForwarderBootstrap.sol";
+import {BittyV1ForwarderBootstrap, NotOwner as BootstrapNotOwner} from "../../src/BittyV1ForwarderBootstrap.sol";
 import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 contract ContractWallet {
@@ -38,6 +38,48 @@ contract ContractWallet {
     }
 }
 
+/// Trusts the forwarder and does nothing — a stand-in target for an injected foreign request.
+contract TrustingNoop {
+    address private immutable FWD;
+
+    constructor(address fwd) {
+        FWD = fwd;
+    }
+
+    function isTrustedForwarder(address a) external view returns (bool) {
+        return a == FWD;
+    }
+
+    function ping() external {}
+}
+
+/// Trusts the forwarder and, the first time it is poked, re-enters {execute} with a pre-armed request
+/// aimed at a DIFFERENT target — the reentrancy that could poison the transient nonce target mid-batch.
+contract ReenteringTarget {
+    BittyV1VaultForwarder private immutable FWD;
+    ERC2771Forwarder.ForwardRequestData private injected;
+    bool private fired;
+
+    constructor(BittyV1VaultForwarder fwd) {
+        FWD = fwd;
+    }
+
+    function isTrustedForwarder(address a) external view returns (bool) {
+        return a == address(FWD);
+    }
+
+    function arm(ERC2771Forwarder.ForwardRequestData calldata r) external {
+        injected = r;
+    }
+
+    function poke() external {
+        if (!fired) {
+            fired = true;
+            FWD.execute(injected);
+        }
+    }
+}
+
 /**
  * The relay path: who may charge, what bounds the charge, and the nonce lanes.
  *
@@ -57,19 +99,17 @@ contract ForwarderTest is Test {
     address owner;
     address relayer = makeAddr("relayer");
     address fwdOwner = makeAddr("fwdOwner");
-    address weth = makeAddr("weth");
-    address constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
+    address gasWrapped = makeAddr("gasWrapped");
 
     function setUp() public {
         owner = vm.addr(ownerPk);
         vm.etch(BITTY_GUARD, address(new MockGuard()).code);
         guard = MockGuard(BITTY_GUARD);
+        guard.setConfigAddress(CFG_OWNER, fwdOwner); // the forwarder reads its owner from the guard
 
         // The vault trusts BITTY_FORWARDER by constant, so the forwarder has to live there.
         vm.etch(BITTY_FORWARDER, address(new BittyV1VaultForwarder()).code);
         fwd = BittyV1VaultForwarder(payable(BITTY_FORWARDER));
-        vm.prank(DEPLOYER, DEPLOYER);
-        fwd.initialize(fwdOwner);
         vm.prank(fwdOwner);
         fwd.setRelayerApproval(relayer, true);
 
@@ -86,7 +126,7 @@ contract ForwarderTest is Test {
     }
 
     function _newVault(address o) internal returns (BittyV1Vault) {
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (o, weth, false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (o, gasWrapped, false, address(0), 0));
         return BittyV1Vault(payable(new ERC1967Proxy(address(impl), init)));
     }
 
@@ -177,6 +217,55 @@ contract ForwarderTest is Test {
         fwd.execute(r);
         assertTrue(_allowlistOn(vaultA));
         assertEq(usdc.balanceOf(BITTY_FEE_COLLECTOR), 0, "no fee taken");
+    }
+
+    function test_relayedPayRelayerFeeIsBlocked() public {
+        (address attacker, uint256 attackerPk) = makeAddrAndKey("attacker");
+        bytes memory data = abi.encodeWithSelector(BittyV1Vault.payRelayerFee.selector, address(usdc), 5e6);
+        ERC2771Forwarder.ForwardRequestData memory r = _sign(_req(attacker, address(vaultA), data), attackerPk);
+
+        vm.prank(attacker);
+        vm.expectRevert(BittyV1VaultForwarder.PayRelayerFeeNotRelayable.selector);
+        fwd.execute(r);
+
+        assertEq(usdc.balanceOf(BITTY_FEE_COLLECTOR), 0, "no fee drained");
+    }
+
+    /**
+     * A batch request whose execution re-enters {execute} for another target must not let that reentrant
+     * call steal a later sibling's nonce. {_execute} re-binds the nonce target to its own `request.to`
+     * right before consuming, so the poisoned transient value from the reentrant call is overwritten.
+     * Were the target set only once per entry point, req1 below would burn the injected target's lane,
+     * leave its own lane un-advanced, and stay replayable.
+     */
+    function test_batchReentrancyCannotOrphanASiblingsNonce() public {
+        ReenteringTarget rt = new ReenteringTarget(fwd);
+        TrustingNoop vt = new TrustingNoop(address(fwd));
+
+        // A foreign request aimed at `vt`, injected mid-batch by rt's reentrancy.
+        ERC2771Forwarder.ForwardRequestData memory injected = _signNonce(
+            _req(owner, address(vt), abi.encodeWithSignature("ping()")), ownerPk, fwd.nonceFor(owner, address(vt))
+        );
+        rt.arm(injected);
+
+        // Two requests, both targeting rt; the first re-enters the forwarder while it runs.
+        ERC2771Forwarder.ForwardRequestData[] memory reqs = new ERC2771Forwarder.ForwardRequestData[](2);
+        reqs[0] = _signNonce(_req(owner, address(rt), abi.encodeWithSignature("poke()")), ownerPk, 0);
+        reqs[1] = _signNonce(_req(owner, address(rt), abi.encodeWithSignature("poke()")), ownerPk, 1);
+
+        vm.prank(relayer);
+        fwd.executeBatchWithFee(reqs, address(rt), address(usdc), 0);
+
+        // Both legs consumed rt's own lane; the reentrant relay burned vt's lane, not req1's.
+        assertEq(fwd.nonceFor(owner, address(rt)), 2, "both batch legs advanced rt's lane");
+        assertEq(fwd.nonceFor(owner, address(vt)), 1, "the injected request advanced vt's own lane");
+
+        // req1 is therefore spent — replaying it is rejected.
+        ERC2771Forwarder.ForwardRequestData[] memory replay = new ERC2771Forwarder.ForwardRequestData[](1);
+        replay[0] = reqs[1];
+        vm.prank(relayer);
+        vm.expectRevert();
+        fwd.executeBatchWithFee(replay, address(rt), address(usdc), 0);
     }
 
     function test_forgedSignatureRejected() public {
@@ -326,19 +415,9 @@ contract ForwarderTest is Test {
 
     // ── admin ─────────────────────────────────────────────────────────────────
 
-    function test_onlyDeployerMayInitialize() public {
-        vm.etch(address(0xF00D), address(new BittyV1VaultForwarder()).code);
-        BittyV1VaultForwarder fresh = BittyV1VaultForwarder(payable(address(0xF00D)));
-        address squatter = makeAddr("squatter");
-        vm.prank(squatter, squatter);
-        vm.expectRevert(BittyV1VaultForwarder.NotDeployer.selector);
-        fresh.initialize(squatter);
-    }
-
-    function test_ownershipIsNotRenounceable() public {
-        vm.prank(fwdOwner);
-        vm.expectRevert(BittyV1VaultForwarder.OwnershipNotRenounceable.selector);
-        fwd.renounceOwnership();
+    /// The owner is the guard's configured owner — no per-forwarder owner to squat or initialize.
+    function test_ownerIsTheGuardConfiguredOwner() public view {
+        assertEq(fwd.owner(), fwdOwner, "owner is read from the guard config");
     }
 
     function test_onlyOwnerMayApproveRelayers() public {
@@ -537,12 +616,10 @@ contract ForwarderTest is Test {
     function test_forwarderSurvivesAnImplementationChange() public {
         address proxy = address(new ERC1967Proxy(address(new BittyV1ForwarderBootstrap()), ""));
         address build = address(new BittyV1VaultForwarder());
-        vm.prank(DEPLOYER, DEPLOYER);
+        vm.prank(fwdOwner); // the guard-configured owner authorizes the first upgrade off the bootstrap
         UUPSUpgradeable(proxy).upgradeToAndCall(build, "");
 
         BittyV1VaultForwarder f = BittyV1VaultForwarder(payable(proxy));
-        vm.prank(DEPLOYER, DEPLOYER);
-        f.initialize(fwdOwner);
         vm.prank(fwdOwner);
         f.setRelayerApproval(relayer, true);
 
@@ -563,13 +640,16 @@ contract ForwarderTest is Test {
     }
 
     /// The proxy address is reproducible on every chain, so the window before the first upgrade is
-    /// reachable by anyone on a chain Bitty has not deployed to yet. Only the deployer may close it.
-    function test_onlyDeployerMayUpgradeOffTheForwarderBootstrap() public {
+    /// reachable by anyone on a chain Bitty has not deployed to yet. Only the guard's owner may close it.
+    function test_onlyTheOwnerMayUpgradeOffTheForwarderBootstrap() public {
         address proxy = address(new ERC1967Proxy(address(new BittyV1ForwarderBootstrap()), ""));
         address build = address(new BittyV1VaultForwarder());
-        address stranger = makeAddr("stranger");
-        vm.prank(stranger, stranger);
-        vm.expectRevert(BootstrapNotDeployer.selector);
+
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert(BootstrapNotOwner.selector);
+        UUPSUpgradeable(proxy).upgradeToAndCall(build, "");
+
+        vm.prank(fwdOwner); // the guard-configured owner can
         UUPSUpgradeable(proxy).upgradeToAndCall(build, "");
     }
 }

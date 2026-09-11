@@ -50,14 +50,14 @@ contract BittyV1Vault is BittyV1VaultBase, IBeacon {
 
     function initialize(
         address owner_,
-        address weth_,
+        address gasWrapped_,
         bool allowlistEnabled,
         address activationAsset,
         uint256 activationAmount
     ) external initializer {
-        if (owner_ == address(0) || weth_ == address(0)) revert AddressZero();
+        if (owner_ == address(0) || gasWrapped_ == address(0)) revert AddressZero();
         __Ownable_init(owner_);
-        PaymentLogic.initialize(weth_);
+        PaymentLogic.initialize(gasWrapped_);
         DeFiLogic.initialize(allowlistEnabled);
         if (activationAsset != address(0) && activationAmount != 0) {
             GaslessLogic.payActivationFee(activationAsset, activationAmount);
@@ -66,10 +66,10 @@ contract BittyV1Vault is BittyV1VaultBase, IBeacon {
             if (activationAsset != address(0)) {
                 DeFiLogic.listInitialAsset(activationAsset);
             }
-            DeFiLogic.listInitialAsset(weth_);
+            DeFiLogic.listInitialAsset(gasWrapped_);
         }
         uint256 bal = address(this).balance;
-        if (bal > 0) WETH(payable(weth_)).deposit{value: bal}();
+        if (bal > 0) WETH(payable(gasWrapped_)).deposit{value: bal}();
     }
 
     modifier onlyOwnerOrPayoutOperator() {
@@ -81,12 +81,12 @@ contract BittyV1Vault is BittyV1VaultBase, IBeacon {
         return _msgSender() == owner();
     }
 
-    function _weth() private view returns (address) {
-        return BittyStorage.vault().weth;
+    function _gasWrapped() private view returns (address) {
+        return BittyStorage.vault().gasWrapped;
     }
 
     function _payoutAsset(address asset) private view returns (address) {
-        return asset == address(0) ? _weth() : asset;
+        return asset == address(0) ? _gasWrapped() : asset;
     }
 
     function acceptOwnership() public override {
@@ -103,17 +103,17 @@ contract BittyV1Vault is BittyV1VaultBase, IBeacon {
     }
 
     receive() external payable {
-        address weth = _weth();
-        if (msg.value > 0 && msg.sender != weth) {
-            WETH(payable(weth)).deposit{value: msg.value}();
-            try IAutoYieldTrigger(address(this)).autoYield(weth) {} catch {}
+        address gasWrapped = _gasWrapped();
+        if (msg.value > 0 && msg.sender != gasWrapped) {
+            WETH(payable(gasWrapped)).deposit{value: msg.value}();
+            try IAutoYieldTrigger(address(this)).autoYield(gasWrapped) {} catch {}
         }
     }
 
-    function ETHToWETH() external {
-        address weth = _weth();
+    function wrapNative() external {
+        address gasWrapped = _gasWrapped();
         uint256 bal = address(this).balance;
-        if (bal > 0 && weth != address(0)) WETH(payable(weth)).deposit{value: bal}();
+        if (bal > 0 && gasWrapped != address(0)) WETH(payable(gasWrapped)).deposit{value: bal}();
     }
 
     fallback() external payable {
@@ -228,7 +228,35 @@ contract BittyV1Vault is BittyV1VaultBase, IBeacon {
             uint256 count
         ) = ScheduledPaymentLogic.accrueScheduled(id, _msgSender(), withdrawProtocols.length > 0);
         if (skipped) return;
+        _settleScheduledPayout(id, recipient, asset, payoutToken, needed, have, allowPartial, count, withdrawProtocols);
+    }
 
+    function payScheduledAmount(uint256 id, uint256 amount, address[] calldata withdrawProtocols) external {
+        (
+            bool skipped,
+            address recipient,
+            address asset,
+            address payoutToken,
+            uint256 target,
+            uint256 have,
+            bool allowPartial,
+            uint256 count
+        ) = ScheduledPaymentLogic.accrueScheduledAmount(id, amount, _msgSender(), withdrawProtocols.length > 0);
+        if (skipped) return;
+        _settleScheduledPayout(id, recipient, asset, payoutToken, target, have, allowPartial, count, withdrawProtocols);
+    }
+
+    function _settleScheduledPayout(
+        uint256 id,
+        address recipient,
+        address asset,
+        address payoutToken,
+        uint256 needed,
+        uint256 have,
+        bool allowPartial,
+        uint256 count,
+        address[] calldata withdrawProtocols
+    ) private {
         bool native = asset == address(0);
         uint256 covered = have >= needed
             ? 0
@@ -236,14 +264,10 @@ contract BittyV1Vault is BittyV1VaultBase, IBeacon {
 
         uint256 raw = (have < needed ? have : needed) + covered;
         uint256 delivered = raw < needed ? raw : needed;
-        if (delivered < needed && !allowPartial) revert InsufficientBalance();
+        if (delivered == 0 || (delivered < needed && !allowPartial)) revert InsufficientBalance();
 
         ScheduledPaymentLogic.payScheduledOut(asset, recipient, native ? delivered : (have < needed ? have : needed));
         emit IBittyV1Vault.ScheduledPaymentPaid(id, recipient, asset, delivered, count);
-    }
-
-    function payScheduledAmount(uint256 id, uint256 amount) external {
-        ScheduledPaymentLogic.payScheduledAmount(id, amount, _msgSender());
     }
 
     function addWhitelistedRecipient(address recipient, address allowedAsset)
@@ -443,8 +467,8 @@ contract BittyV1Vault is BittyV1VaultBase, IBeacon {
         return DeFiLogic.stableCoinAllowed(asset);
     }
 
-    function wethAddress() external view returns (address) {
-        return _weth();
+    function gasWrappedAddress() external view returns (address) {
+        return _gasWrapped();
     }
 
     function getSubVault(uint256[] calldata subIds)

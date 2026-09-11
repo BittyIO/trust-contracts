@@ -4,7 +4,7 @@ pragma solidity ^0.8.34;
 import {BittyV1VaultBootstrap} from "../../src/BittyV1VaultBootstrap.sol";
 import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {ASSET_STABLE_COIN} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
+import {ASSET_STABLE_COIN, IMPLEMENTATION_VAULT} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {Test} from "forge-std/Test.sol";
 import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 import {MockGuard} from "../helpers/MockGuard.sol";
@@ -13,12 +13,17 @@ import {BittyV1Vault} from "../../src/BittyV1Vault.sol";
 import {BittyV1SubVault} from "../../src/subvault/BittyV1SubVault.sol";
 import {BittyV1VaultFactory} from "../../src/BittyV1VaultFactory.sol";
 import {
-    VaultAlreadyActivated,
-    InvalidActivationSignature,
-    NotDeployer
-} from "../../src/interfaces/IBittyV1VaultFactory.sol";
-import {AddressZero} from "../../src/interfaces/IBittyV1Vault.sol";
-import {BITTY_GUARD, BITTY_FEE_COLLECTOR} from "../../src/logic/Constants.sol";
+    BittyV1VaultFactoryBootstrap,
+    NotOwner as FactoryBootstrapNotOwner
+} from "../../src/BittyV1VaultFactoryBootstrap.sol";
+import {VaultAlreadyActivated, InvalidActivationSignature} from "../../src/interfaces/IBittyV1VaultFactory.sol";
+import {
+    BITTY_GUARD,
+    BITTY_FEE_COLLECTOR,
+    BITTY_VAULT_BOOTSTRAP,
+    CFG_GAS_WRAPPED,
+    CFG_OWNER
+} from "../../src/logic/Constants.sol";
 
 /**
  * Activation. The vault's address is derived from its OWNER alone, so it can be funded before it
@@ -37,8 +42,7 @@ contract FactoryTest is Test {
 
     uint256 ownerPk = 0xA11CE;
     address owner;
-    address weth = makeAddr("weth");
-    address constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
+    address gasWrapped = makeAddr("gasWrapped");
 
     function setUp() public {
         owner = vm.addr(ownerPk);
@@ -50,9 +54,10 @@ contract FactoryTest is Test {
         impl = new BittyV1Vault(address(facet), address(subImpl));
 
         factory = new BittyV1VaultFactory();
-        address boot355 = address(new BittyV1VaultBootstrap());
-        vm.prank(DEPLOYER, DEPLOYER);
-        factory.initialize(address(impl), weth, boot355);
+        // deployCodeTo (not etch) so the bootstrap's UUPS __self immutable resolves to this constant.
+        deployCodeTo("BittyV1VaultBootstrap.sol:BittyV1VaultBootstrap", BITTY_VAULT_BOOTSTRAP);
+        guard.setLatestImpl(IMPLEMENTATION_VAULT, address(impl));
+        guard.setConfigAddress(CFG_GAS_WRAPPED, gasWrapped);
 
         usdc = new MockERC20("USD Coin", "USDC", 6);
         guard.setAsset(address(usdc), ASSET_STABLE_COIN);
@@ -191,52 +196,22 @@ contract FactoryTest is Test {
 
     // ── initialize ────────────────────────────────────────────────────────────
 
-    /**
-     * Gated on tx.origin, not msg.sender: that is what stops another chain's squatter claiming this
-     * factory's deterministic address, at the cost of these calls never being relayable.
-     */
-    function test_onlyDeployerMayInitialize() public {
-        address boot = address(new BittyV1VaultBootstrap());
-        BittyV1VaultFactory fresh = new BittyV1VaultFactory();
-        address squatter = makeAddr("squatter");
-        vm.prank(squatter, squatter);
-        vm.expectRevert(NotDeployer.selector);
-        fresh.initialize(address(impl), weth, boot);
-    }
-
-    function test_initializeRejectsZeroAddresses() public {
-        address boot = address(new BittyV1VaultBootstrap());
-        BittyV1VaultFactory fresh = new BittyV1VaultFactory();
-        vm.startPrank(DEPLOYER, DEPLOYER);
-        vm.expectRevert(AddressZero.selector);
-        fresh.initialize(address(0), weth, boot);
-        vm.expectRevert(AddressZero.selector);
-        fresh.initialize(address(impl), address(0), boot);
-        vm.stopPrank();
-    }
-
-    /// The setter guards the same zero it guards at initialize: a zero implementation would leave the
-    /// factory minting vaults that upgrade straight off the bootstrap into nothing.
-    function test_setVaultImplementationRejectsZero() public {
-        vm.prank(DEPLOYER, DEPLOYER);
-        vm.expectRevert(AddressZero.selector);
-        factory.setVaultImplementation(address(0));
+    /// The wrapped-gas token comes from the guard now: activation reverts if the chain hasn't set it.
+    function test_activationRevertsWhenGasWrappedUnset() public {
+        guard.setConfigAddress(CFG_GAS_WRAPPED, address(0)); // simulate an unconfigured chain
+        vm.prank(makeAddr("someone"));
+        vm.expectRevert(); // vault initialize hits AddressZero on a zero wrapped-gas token
+        factory.activateVault(true);
     }
 
     /// Activating with WETH as the fee asset makes the vault list the SAME asset twice - once as the
     /// activation asset, once as the wrapped-native default. The second listing is a no-op rather than
     /// a revert or a duplicate entry.
     function test_activatingWithWethAsTheFeeAssetListsItOnce() public {
-        BittyV1VaultFactory fresh = new BittyV1VaultFactory();
-        address boot = address(new BittyV1VaultBootstrap());
-        vm.prank(DEPLOYER, DEPLOYER);
-        fresh.initialize(address(impl), address(usdc), boot);
-        // The activation signature is bound to the verifying contract, and _sign reads this field.
-        factory = fresh;
-
-        usdc.mint(fresh.vaultAddress(owner), 100e6);
+        guard.setConfigAddress(CFG_GAS_WRAPPED, address(usdc)); // wrapped-gas == the fee asset for this case
+        usdc.mint(factory.vaultAddress(owner), 100e6);
         address v =
-            fresh.activateVaultByAsset(owner, address(usdc), 2e6, true, _sign(owner, address(usdc), 2e6, ownerPk));
+            factory.activateVaultByAsset(owner, address(usdc), 2e6, true, _sign(owner, address(usdc), 2e6, ownerPk));
 
         assertTrue(IAllowlistView(v).allowlistEnabled(), "allowlist should be on");
         assertTrue(IAllowlistView(v).isAssetAllowed(address(usdc)), "the fee asset is listed");
@@ -253,13 +228,6 @@ contract FactoryTest is Test {
 
         vm.expectRevert(VaultAlreadyActivated.selector);
         UUPSUpgradeable(proxy).upgradeToAndCall(address(impl), "");
-    }
-
-    function test_cannotInitializeTwice() public {
-        address boot = address(new BittyV1VaultBootstrap());
-        vm.prank(DEPLOYER, DEPLOYER);
-        vm.expectRevert();
-        factory.initialize(address(impl), weth, boot);
     }
 
     /**
@@ -300,8 +268,7 @@ contract FactoryTest is Test {
 
         BittyV1VaultDeFiFacet facet2 = new BittyV1VaultDeFiFacet();
         BittyV1Vault newImpl = new BittyV1Vault(address(facet2), address(new BittyV1SubVault(address(facet2))));
-        vm.prank(DEPLOYER, DEPLOYER);
-        factory.setVaultImplementation(address(newImpl));
+        guard.setLatestImpl(IMPLEMENTATION_VAULT, address(newImpl)); // governance points at a new build
 
         assertEq(factory.vaultAddress(owner), predictedBefore, "vault address moved with the implementation");
 
@@ -317,14 +284,59 @@ contract FactoryTest is Test {
         vm.prank(owner);
         address v = factory.activateVault(true);
         assertEq(_implOf(v), address(impl), "should be on the real implementation");
-        assertTrue(_implOf(v) != factory.bootstrapImplementation(), "still on the bootstrap");
+        assertTrue(_implOf(v) != BITTY_VAULT_BOOTSTRAP, "still on the bootstrap");
     }
 
-    /// Only the deployer may point new vaults at a different build.
-    function test_onlyDeployerMaySetVaultImplementation() public {
-        vm.prank(makeAddr("stranger"), makeAddr("stranger"));
-        vm.expectRevert(NotDeployer.selector);
-        factory.setVaultImplementation(address(impl));
+    /**
+     * The factory is itself a proxy born on BittyV1VaultFactoryBootstrap. Only the guard's owner may
+     * upgrade it off the bootstrap, and once upgraded it mints vaults normally — so factory logic can
+     * change at a fixed address without moving vault addresses.
+     */
+    function test_onlyTheOwnerMayUpgradeOffTheFactoryBootstrap() public {
+        address factoryOwner = makeAddr("factoryOwner");
+        guard.setConfigAddress(CFG_OWNER, factoryOwner);
+
+        address proxy = address(new ERC1967Proxy(address(new BittyV1VaultFactoryBootstrap()), ""));
+        address build = address(new BittyV1VaultFactory());
+
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert(FactoryBootstrapNotOwner.selector);
+        UUPSUpgradeable(proxy).upgradeToAndCall(build, "");
+
+        vm.prank(factoryOwner);
+        UUPSUpgradeable(proxy).upgradeToAndCall(build, "");
+
+        vm.prank(owner);
+        address v = BittyV1VaultFactory(proxy).activateVault(true);
+        assertEq(BittyV1Vault(payable(v)).owner(), owner, "the proxied factory mints a working vault");
+    }
+
+    /**
+     * Once the proxy is on a factory BUILD (not the bootstrap), a further upgrade runs the factory's
+     * OWN _authorizeUpgrade — gated on owner() = the guard's configured owner — rather than the
+     * bootstrap's gate. Covers owner(), the onlyOwner modifier (both branches), and _authorizeUpgrade.
+     */
+    function test_ownerMayUpgradeTheFactoryLogicItself() public {
+        address factoryOwner = makeAddr("factoryOwner");
+        guard.setConfigAddress(CFG_OWNER, factoryOwner);
+
+        address proxy = address(new ERC1967Proxy(address(new BittyV1VaultFactoryBootstrap()), ""));
+        address firstBuild = address(new BittyV1VaultFactory());
+        vm.prank(factoryOwner);
+        UUPSUpgradeable(proxy).upgradeToAndCall(firstBuild, "");
+
+        assertEq(BittyV1VaultFactory(proxy).owner(), factoryOwner, "owner() reflects the guard's configured owner");
+
+        // The proxy now runs a factory build, so this upgrade goes through the factory's own onlyOwner.
+        address newBuild = address(new BittyV1VaultFactory());
+
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert(BittyV1VaultFactory.NotOwner.selector);
+        UUPSUpgradeable(proxy).upgradeToAndCall(newBuild, "");
+
+        vm.prank(factoryOwner);
+        UUPSUpgradeable(proxy).upgradeToAndCall(newBuild, "");
+        assertEq(_implOf(proxy), newBuild, "the owner upgraded the factory logic in place");
     }
 
     function _implOf(address proxy) internal view returns (address) {

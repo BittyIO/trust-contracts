@@ -48,7 +48,7 @@ contract ProposalEditsTest is Test {
     address operator = makeAddr("operator");
     address other = makeAddr("otherOperator");
     address payee = makeAddr("payee");
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
 
     function setUp() public {
         vm.etch(BITTY_GUARD, address(new MockGuard()).code);
@@ -57,7 +57,7 @@ contract ProposalEditsTest is Test {
         BittyV1VaultDeFiFacet facet = new BittyV1VaultDeFiFacet();
         BittyV1SubVault subImpl = new BittyV1SubVault(address(facet));
         BittyV1Vault impl = new BittyV1Vault(address(facet), address(subImpl));
-        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, weth, false, address(0), 0));
+        bytes memory init = abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, false, address(0), 0));
         vault = BittyV1Vault(payable(new ERC1967Proxy(address(impl), init)));
 
         usdc = new MockERC20("USD Coin", "USDC", 6);
@@ -426,7 +426,7 @@ contract ProposalEditsTest is Test {
         uint256 id = _propose(owner, 10e6);
         vm.prank(owner);
         vm.expectRevert(PayScheduledPaymentAmountTriggerEmpty.selector);
-        vault.payScheduledAmount(id, 1e6);
+        vault.payScheduledAmount(id, 1e6, new address[](0));
     }
 
     function test_onlyTheNamedTriggerMayDrawADownPayment() public {
@@ -435,10 +435,10 @@ contract ProposalEditsTest is Test {
 
         vm.prank(owner);
         vm.expectRevert(ScheduledPaymentTriggerError.selector);
-        vault.payScheduledAmount(id, 1e6);
+        vault.payScheduledAmount(id, 1e6, new address[](0));
 
         vm.prank(trg);
-        vault.payScheduledAmount(id, 1e6);
+        vault.payScheduledAmount(id, 1e6, new address[](0));
         assertEq(usdc.balanceOf(payee), 1e6, "the trigger drew part of it");
     }
 
@@ -447,7 +447,7 @@ contract ProposalEditsTest is Test {
         uint256 id = _triggered(10e6, trg);
         vm.prank(trg);
         vm.expectRevert(PayMoreThanScheduledPaymentAmount.selector);
-        vault.payScheduledAmount(id, 11e6);
+        vault.payScheduledAmount(id, 11e6, new address[](0));
     }
 
     /// Opted into partial payment and the vault is empty: the run is SKIPPED, not reverted, so a
@@ -465,7 +465,7 @@ contract ProposalEditsTest is Test {
         assertEq(usdc.balanceOf(address(vault)), 0, "nothing left to pay with");
 
         vm.prank(trg);
-        vault.payScheduledAmount(id, 1e6);
+        vault.payScheduledAmount(id, 1e6, new address[](0));
         assertEq(usdc.balanceOf(payee), 0, "skipped quietly");
     }
 

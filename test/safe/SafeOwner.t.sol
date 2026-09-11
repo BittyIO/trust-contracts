@@ -2,15 +2,11 @@
 pragma solidity ^0.8.34;
 
 import {BittyV1VaultBootstrap} from "../../src/BittyV1VaultBootstrap.sol";
-import {ASSET_STABLE_COIN} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
+import {ASSET_STABLE_COIN, IMPLEMENTATION_VAULT} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC2771Forwarder} from "openzeppelin-contracts/contracts/metatx/ERC2771Forwarder.sol";
 import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
-import {Safe} from "safe-contracts/Safe.sol";
-import {SafeProxyFactory} from "safe-contracts/proxies/SafeProxyFactory.sol";
-import {CompatibilityFallbackHandler} from "safe-contracts/handler/CompatibilityFallbackHandler.sol";
-import {Enum} from "safe-contracts/common/Enum.sol";
 import {MockGuard} from "../helpers/MockGuard.sol";
 import {BittyV1VaultDeFiFacet} from "../../src/BittyV1VaultDeFiFacet.sol";
 import {BittyV1Vault} from "../../src/BittyV1Vault.sol";
@@ -18,7 +14,66 @@ import {BittyV1SubVault} from "../../src/subvault/BittyV1SubVault.sol";
 import {BittyV1VaultFactory} from "../../src/BittyV1VaultFactory.sol";
 import {BittyV1VaultForwarder} from "../../src/BittyV1VaultForwarder.sol";
 import {InvalidActivationSignature} from "../../src/interfaces/IBittyV1VaultFactory.sol";
-import {BITTY_GUARD, BITTY_FORWARDER} from "../../src/logic/Constants.sol";
+import {
+    BITTY_GUARD, BITTY_FORWARDER, BITTY_VAULT_BOOTSTRAP, CFG_GAS_WRAPPED, CFG_OWNER
+} from "../../src/logic/Constants.sol";
+
+// The Safe (v1.4.1) is deployed by BYTECODE via vm.deployCode — never imported as source — so its
+// pre-memory-safe assembly does not drag this test's vault compilation off via_ir. These minimal
+// interfaces cover only what the test calls, and match Safe's selectors exactly (Operation ABI-encodes
+// as uint8, like Safe's own Enum.Operation). See SafeArtifacts.sol and foundry.toml [profile.safe].
+enum Operation {
+    Call,
+    DelegateCall
+}
+
+interface ISafe {
+    function setup(
+        address[] calldata owners,
+        uint256 threshold,
+        address to,
+        bytes calldata data,
+        address fallbackHandler,
+        address paymentToken,
+        uint256 payment,
+        address payable paymentReceiver
+    ) external;
+    function getTransactionHash(
+        address to,
+        uint256 value,
+        bytes calldata data,
+        Operation operation,
+        uint256 safeTxGas,
+        uint256 baseGas,
+        uint256 gasPrice,
+        address gasToken,
+        address refundReceiver,
+        uint256 _nonce
+    ) external view returns (bytes32);
+    function execTransaction(
+        address to,
+        uint256 value,
+        bytes calldata data,
+        Operation operation,
+        uint256 safeTxGas,
+        uint256 baseGas,
+        uint256 gasPrice,
+        address gasToken,
+        address payable refundReceiver,
+        bytes calldata signatures
+    ) external payable returns (bool);
+    function nonce() external view returns (uint256);
+}
+
+interface ISafeProxyFactory {
+    function createProxyWithNonce(address singleton, bytes calldata initializer, uint256 saltNonce)
+        external
+        returns (address);
+}
+
+interface ISafeFallback {
+    function getMessageHash(bytes calldata message) external view returns (bytes32);
+}
 
 /**
  * A Gnosis Safe as the vault owner.
@@ -35,7 +90,7 @@ import {BITTY_GUARD, BITTY_FORWARDER} from "../../src/logic/Constants.sol";
  * — which both run through {SignatureChecker} and so must fall back to ERC-1271 correctly.
  */
 contract SafeOwnerTest is Test {
-    Safe safe;
+    ISafe safe;
     BittyV1Vault vault;
     BittyV1VaultFactory factory;
     BittyV1VaultForwarder fwd;
@@ -47,10 +102,9 @@ contract SafeOwnerTest is Test {
     uint256[3] pks;
     address[3] owners;
 
-    address weth = makeAddr("weth");
+    address gasWrapped = makeAddr("gasWrapped");
     address relayer = makeAddr("relayer");
     address fwdOwner = makeAddr("fwdOwner");
-    address constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
 
     function setUp() public {
         vm.warp(1_000_000);
@@ -69,22 +123,21 @@ contract SafeOwnerTest is Test {
 
         vault = BittyV1Vault(
             payable(new ERC1967Proxy(
-                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (address(safe), weth, false, address(0), 0))
+                    address(impl), abi.encodeCall(BittyV1Vault.initialize, (address(safe), gasWrapped, false, address(0), 0))
                 ))
         );
         usdc.mint(address(vault), 1_000e6);
 
-        BittyV1VaultFactory factoryImpl = new BittyV1VaultFactory();
-        factory = BittyV1VaultFactory(address(new ERC1967Proxy(address(factoryImpl), "")));
-        address boot = address(new BittyV1VaultBootstrap());
-        vm.prank(DEPLOYER, DEPLOYER);
-        factory.initialize(address(impl), weth, boot);
+        factory = new BittyV1VaultFactory();
+        // deployCodeTo (not etch) so the bootstrap's UUPS __self immutable resolves to this constant.
+        deployCodeTo("BittyV1VaultBootstrap.sol:BittyV1VaultBootstrap", BITTY_VAULT_BOOTSTRAP);
+        guard.setLatestImpl(IMPLEMENTATION_VAULT, address(impl));
+        MockGuard(BITTY_GUARD).setConfigAddress(CFG_GAS_WRAPPED, gasWrapped);
 
         BittyV1VaultForwarder fwdImpl = new BittyV1VaultForwarder();
         vm.etch(BITTY_FORWARDER, address(fwdImpl).code);
         fwd = BittyV1VaultForwarder(payable(BITTY_FORWARDER));
-        vm.prank(DEPLOYER, DEPLOYER);
-        fwd.initialize(fwdOwner);
+        MockGuard(BITTY_GUARD).setConfigAddress(CFG_OWNER, fwdOwner);
         vm.prank(fwdOwner);
         fwd.setRelayerApproval(relayer, true);
     }
@@ -104,17 +157,17 @@ contract SafeOwnerTest is Test {
         }
     }
 
-    function _deploySafe() private returns (Safe s) {
-        Safe singleton = new Safe();
-        SafeProxyFactory f = new SafeProxyFactory();
-        CompatibilityFallbackHandler handler = new CompatibilityFallbackHandler();
+    function _deploySafe() private returns (ISafe s) {
+        address singleton = deployCode("Safe.sol:Safe");
+        address f = deployCode("SafeProxyFactory.sol:SafeProxyFactory");
+        address handler = deployCode("CompatibilityFallbackHandler.sol:CompatibilityFallbackHandler");
         address[] memory o = new address[](3);
         for (uint256 i; i < 3; i++) {
             o[i] = owners[i];
         }
         bytes memory init =
-            abi.encodeCall(Safe.setup, (o, 2, address(0), "", address(handler), address(0), 0, payable(address(0))));
-        s = Safe(payable(address(f.createProxyWithNonce(address(singleton), init, 0))));
+            abi.encodeCall(ISafe.setup, (o, 2, address(0), "", handler, address(0), 0, payable(address(0))));
+        s = ISafe(ISafeProxyFactory(f).createProxyWithNonce(singleton, init, 0));
     }
 
     /// `count` owner signatures over `h`, concatenated in ascending owner order.
@@ -128,10 +181,10 @@ contract SafeOwnerTest is Test {
     /// The Safe executing a call, the way a multisig actually does it.
     function _exec(address to, bytes memory data) private {
         bytes32 txHash = safe.getTransactionHash(
-            to, 0, data, Enum.Operation.Call, 0, 0, 0, address(0), payable(address(0)), safe.nonce()
+            to, 0, data, Operation.Call, 0, 0, 0, address(0), payable(address(0)), safe.nonce()
         );
         safe.execTransaction(
-            to, 0, data, Enum.Operation.Call, 0, 0, 0, address(0), payable(address(0)), _sign(txHash, 2)
+            to, 0, data, Operation.Call, 0, 0, 0, address(0), payable(address(0)), _sign(txHash, 2)
         );
     }
 
@@ -141,7 +194,7 @@ contract SafeOwnerTest is Test {
      *      envelope would make this test agree with my reading of Safe instead of with Safe.
      */
     function _sign1271(bytes32 dataHash, uint256 count) private view returns (bytes memory) {
-        bytes32 wrapped = CompatibilityFallbackHandler(payable(address(safe))).getMessageHash(abi.encode(dataHash));
+        bytes32 wrapped = ISafeFallback(address(safe)).getMessageHash(abi.encode(dataHash));
         return _sign(wrapped, count);
     }
 
@@ -169,7 +222,7 @@ contract SafeOwnerTest is Test {
         BittyV1Vault v = BittyV1Vault(
             payable(new ERC1967Proxy(
                     address(new BittyV1Vault(address(facet), address(new BittyV1SubVault(address(facet))))),
-                    abi.encodeCall(BittyV1Vault.initialize, (eoa, weth, false, address(0), 0))
+                    abi.encodeCall(BittyV1Vault.initialize, (eoa, gasWrapped, false, address(0), 0))
                 ))
         );
 
@@ -221,7 +274,7 @@ contract SafeOwnerTest is Test {
     }
 
     function test_anotherSafeSignatureDoesNotPassForThisOne() public {
-        Safe other = _deploySafe();
+        ISafe other = _deploySafe();
         ERC2771Forwarder.ForwardRequestData memory r =
             _relay(address(other), address(vault), abi.encodeCall(BittyV1Vault.enableAllowlist, ()), 2);
         r.from = address(safe); // same signature, claimed for the wrong Safe

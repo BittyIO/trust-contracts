@@ -3,7 +3,7 @@ pragma solidity ^0.8.34;
 
 import {BittyV1AccountBase} from "../BittyV1AccountBase.sol";
 import {BittyStorage} from "../logic/BittyStorage.sol";
-import {NotParentVault} from "../interfaces/IBittyV1SubVault.sol";
+import {NotParentVault, OwnershipNotRenounceable} from "../interfaces/IBittyV1SubVault.sol";
 
 /**
  * @title BittyV1SubVaultBase
@@ -16,5 +16,15 @@ abstract contract BittyV1SubVaultBase is BittyV1AccountBase {
     modifier onlyParent() {
         if (msg.sender != BittyStorage.subVault().vault) revert NotParentVault();
         _;
+    }
+
+    /**
+     * @dev Renouncing would drop the sub owner to address(0) — freezing the sub's DeFi and, once the
+     *      parent is renounced too, cutting off `returnToVault` so the funds can never get home.
+     *      Ownership rotates only through the parent's setSubOwner / the owner's own transferOwnership,
+     *      neither of which can reach the zero address.
+     */
+    function renounceOwnership() public pure override {
+        revert OwnershipNotRenounceable();
     }
 }

@@ -122,7 +122,7 @@ interface IBittyV1Vault {
     /**
      * @notice The vault's WETH address.
      */
-    function wethAddress() external view returns (address);
+    function gasWrappedAddress() external view returns (address);
 
     /**
      * @notice Get the auto yieldings.
@@ -225,7 +225,7 @@ interface IBittyV1Vault {
      * @param id The id of the scheduled payment.
      * @param amount The amount to pay.
      */
-    function payScheduledAmount(uint256 id, uint256 amount) external;
+    function payScheduledAmount(uint256 id, uint256 amount, address[] calldata withdrawProtocols) external;
 
     /**
      * @notice Wrap any native ETH the vault holds into WETH. receive() auto-wraps incoming ETH, but ETH
@@ -233,7 +233,7 @@ interface IBittyV1Vault {
      *         as raw native ETH the vault's WETH-denominated ETH accounting can't spend; this converts it.
      *         Permissionless — it only moves the vault's own ETH into its own WETH.
      */
-    function ETHToWETH() external;
+    function wrapNative() external;
 
     /**
      * @notice The trusted ERC-2771 forwarder for this vault (address(0) = relaying disabled).
