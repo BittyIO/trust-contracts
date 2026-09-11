@@ -107,6 +107,14 @@ contract NFTPositionProtocol is Ownable, Initializable {
     function receiptTokenOf(address) external pure returns (address) {
         return address(0);
     }
+
+    function protocolLineage() external pure returns (bytes32) {
+        return keccak256("bitty.mock.nftposition");
+    }
+
+    function protocolVersion() external pure returns (uint256) {
+        return 1_000_000;
+    }
 }
 
 /// A withdrawable protocol that does not implement receiptTokenOf at all, so the probe staticcall
@@ -130,6 +138,14 @@ contract NoReceiptProtocol is Ownable, Initializable {
         if (amount == type(uint256).max) amount = IERC20(asset).balanceOf(address(this));
         SafeERC20.safeTransfer(IERC20(asset), recipient, amount);
         return amount;
+    }
+
+    function protocolLineage() external pure returns (bytes32) {
+        return keccak256("bitty.mock.noreceipt");
+    }
+
+    function protocolVersion() external pure returns (uint256) {
+        return 1_000_000;
     }
 }
 

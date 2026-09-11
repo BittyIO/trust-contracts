@@ -14,7 +14,7 @@ import {Initializable} from "openzeppelin-contracts/contracts/proxy/utils/Initia
  * funds are delivered only to the configured scheduledPayment.
  */
 contract MockLendingProtocol is IBittyV1Protocol, IBittyV1Yield, Ownable, Initializable {
-    function protocolLineage() external pure returns (bytes32) {
+    function protocolLineage() external pure virtual returns (bytes32) {
         return keccak256("bitty.mock.lending");
     }
 

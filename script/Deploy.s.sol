@@ -6,6 +6,7 @@ import {console2} from "forge-std/console2.sol";
 import {BittyV1Vault} from "../src/BittyV1Vault.sol";
 import {BittyV1ForwarderBootstrap} from "../src/BittyV1ForwarderBootstrap.sol";
 import {BittyV1VaultFactoryBootstrap} from "../src/BittyV1VaultFactoryBootstrap.sol";
+import {BittyV1VaultBootstrap} from "../src/BittyV1VaultBootstrap.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC1967Utils} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Utils.sol";
 import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -31,50 +32,41 @@ import {RiskLogic} from "../src/logic/RiskLogic.sol";
 import {ScheduledPaymentLogic} from "../src/logic/ScheduledPaymentLogic.sol";
 import {WhitelistLogic} from "../src/logic/WhitelistLogic.sol";
 
-interface ImmutableCreate2Factory {
-    function safeCreate2(bytes32 salt, bytes calldata initCode) external payable returns (address);
-    function findCreate2Address(bytes32 salt, bytes calldata initCode) external view returns (address);
-}
-
 /**
  * @title Deploy
  * @notice One generation of the subaccount vault stack: logic libraries, forwarder, shared DeFi facet,
  *         auto-yield keeper, sub-vault implementation, main-vault implementation (wired to facet + sub
  *         impl), and the factory.
- * @dev Deterministic throughout. Libraries, facet, sub impl and keeper go through the standard CREATE2
- *      deployer (salt 0); the forwarder, main impl and factory go through the {ImmutableCreate2Factory}
- *      with vanity salts pinned to the canonical addresses. Implementations are NOT initialized here —
- *      the contracts `_disableInitializers()` in their constructors, so the logic contracts are already
+ * @dev Deterministic throughout, and NO vanity mining: everything goes through the standard salt-0
+ *      CREATE2 deployer, so each address is a plain function of its init code and identical on every
+ *      chain. The forwarder and factory sit at fixed addresses because they are proxies born on constant
+ *      bootstraps, not because their salts were mined. Implementations are NOT initialized here — the
+ *      contracts `_disableInitializers()` in their constructors, so the logic contracts are already
  *      locked. Idempotent: every step checks for existing code first.
  *
- *      NOTE: the main-impl init code now embeds (defiFacet, subVaultImpl), so IMPLEMENTATION_SALT must
- *      be re-mined against the hash this logs. The keeper is NOT pinned anywhere in the vault — each
- *      account names its own trigger in storage via setAutoYieldTrigger — so this address is a
- *      deployment record for whoever configures accounts, not a value the contracts check.
+ *      NOTE: the keeper is NOT pinned anywhere in the vault — each account names its own trigger in
+ *      storage via setAutoYieldTrigger — so its address is a deployment record for whoever configures
+ *      accounts, not a value the contracts check.
  */
 contract Deploy is DeployScript {
-    ImmutableCreate2Factory constant IMMUTABLE_CREATE2 =
-        ImmutableCreate2Factory(0x0000000000FFe8B47B3e2130213B802212439497);
-    address constant DEPLOYER = 0x12EE2de7BF086388B1D560eb95e7191Edfab9823;
-
     address constant SIMPLE_CREATE2 = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
-    bytes32 constant FORWARDER_SALT = 0x12ee2de7bf086388b1d560eb95e7191edfab98236f5534bc8159e4001b2cc6ba;
-    bytes32 constant FACTORY_SALT = 0x12ee2de7bf086388b1d560eb95e7191edfab98230715e18fc32e70001a6ebc1a;
-    bytes32 constant IMPLEMENTATION_SALT = 0x12ee2de7bf086388b1d560eb95e7191edfab9823b41efcf6cabd0600b902d066;
 
     function deploy() public virtual override {
-        if (IBittyV1Guard(BITTY_GUARD).getAddress(CFG_OWNER) == address(0)) {
-            IBittyV1Guard(BITTY_GUARD).setAddress(CFG_OWNER, DEPLOYER);
-        }
+        require(
+            IBittyV1Guard(BITTY_GUARD).getAddress(CFG_OWNER) != address(0),
+            "CFG_OWNER not set in guard - configure it before deploy"
+        );
+        require(
+            IBittyV1Guard(BITTY_GUARD).getAddress(CFG_GAS_WRAPPED) != address(0),
+            "CFG_GAS_WRAPPED not set in guard - configure it before deploy"
+        );
+
         address forwarder = _deployForwarder();
         _deployKeeper(forwarder);
         address vaultImpl = deployImplementationChain();
 
         if (IBittyV1Guard(BITTY_GUARD).latestImplementation(IMPLEMENTATION_VAULT) != vaultImpl) {
             IBittyV1Guard(BITTY_GUARD).setImplementation(vaultImpl, IMPLEMENTATION_VAULT);
-        }
-        if (IBittyV1Guard(BITTY_GUARD).getAddress(CFG_GAS_WRAPPED) != getAddress("WETH")) {
-            IBittyV1Guard(BITTY_GUARD).setAddress(CFG_GAS_WRAPPED, getAddress("WETH"));
         }
 
         _deployBootstrap();
@@ -102,8 +94,9 @@ contract Deploy is DeployScript {
      *      bytecode, and this one must never move - it is in the init code of every vault proxy, so a
      *      different bootstrap would relocate every owner's vault. See BittyV1VaultBootstrap.
      */
-    function _deployBootstrap() private view {
-        require(BITTY_VAULT_BOOTSTRAP.code.length > 0, "BITTY_VAULT_BOOTSTRAP not deployed on this chain");
+    function _deployBootstrap() private {
+        address bootstrap = _create2("BittyV1VaultBootstrap", type(BittyV1VaultBootstrap).creationCode);
+        require(bootstrap == BITTY_VAULT_BOOTSTRAP, "BITTY_VAULT_BOOTSTRAP constant is stale: update Constants.sol");
     }
 
     /**
@@ -181,16 +174,6 @@ contract Deploy is DeployScript {
         }
     }
 
-    function _create2Address(bytes32 salt, bytes memory initCode) private pure returns (address) {
-        return address(
-            uint160(
-                uint256(
-                    keccak256(abi.encodePacked(bytes1(0xff), address(IMMUTABLE_CREATE2), salt, keccak256(initCode)))
-                )
-            )
-        );
-    }
-
     function _create2(string memory name, bytes memory initCode) private returns (address deployed) {
         deployed = address(
             uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), SIMPLE_CREATE2, bytes32(0), keccak256(initCode)))))
@@ -213,15 +196,8 @@ contract Deploy is DeployScript {
     function _deployForwarder() private returns (address forwarder) {
         address bootstrap = _create2("BittyV1ForwarderBootstrap", type(BittyV1ForwarderBootstrap).creationCode);
         bytes memory initCode = abi.encodePacked(type(ERC1967Proxy).creationCode, abi.encode(bootstrap, bytes("")));
-        console2.log("forwarder PROXY initCode hash (mine against this):");
-        console2.logBytes32(keccak256(initCode));
-
-        forwarder = _create2Address(FORWARDER_SALT, initCode);
-        require(forwarder == BITTY_FORWARDER, "BITTY_FORWARDER constant is stale: re-mine and update Constants.sol");
-        if (forwarder.code.length == 0) {
-            IMMUTABLE_CREATE2.safeCreate2(FORWARDER_SALT, initCode);
-            console2.log("forwarder proxy deployed at           ", forwarder);
-        }
+        forwarder = _create2("BittyV1VaultForwarderProxy", initCode);
+        require(forwarder == BITTY_FORWARDER, "BITTY_FORWARDER constant is stale: update Constants.sol");
 
         address build = _create2("BittyV1VaultForwarder", type(BittyV1VaultForwarder).creationCode);
         if (address(uint160(uint256(vm.load(forwarder, ERC1967Utils.IMPLEMENTATION_SLOT)))) != build) {
@@ -269,16 +245,7 @@ contract Deploy is DeployScript {
 
     function _deployImplementation(address defiFacet, address subImpl) private returns (address vaultImpl) {
         bytes memory initCode = abi.encodePacked(type(BittyV1Vault).creationCode, abi.encode(defiFacet, subImpl));
-        console2.log("implementation initCode hash (mine against this):");
-        console2.logBytes32(keccak256(initCode));
-
-        vaultImpl = _create2Address(IMPLEMENTATION_SALT, initCode);
-        if (vaultImpl.code.length == 0) {
-            IMMUTABLE_CREATE2.safeCreate2(IMPLEMENTATION_SALT, initCode);
-            console2.log("BittyV1Vault implementation deployed at", vaultImpl);
-        } else {
-            console2.log("BittyV1Vault implementation already at ", vaultImpl);
-        }
+        vaultImpl = _create2("BittyV1Vault", initCode);
         _reportIfMoved("VAULT_IMPLEMENTATION", vaultImpl);
         saveAddress("VAULT_IMPLEMENTATION", vaultImpl);
     }
@@ -290,14 +257,7 @@ contract Deploy is DeployScript {
             "BITTY_VAULT_FACTORY_BOOTSTRAP constant is stale: update Constants.sol"
         );
         bytes memory initCode = abi.encodePacked(type(ERC1967Proxy).creationCode, abi.encode(bootstrap, bytes("")));
-        console2.log("factory PROXY initCode hash (mine the salt against this):");
-        console2.logBytes32(keccak256(initCode));
-
-        address factory = _create2Address(FACTORY_SALT, initCode);
-        if (factory.code.length == 0) {
-            IMMUTABLE_CREATE2.safeCreate2(FACTORY_SALT, initCode);
-            console2.log("factory proxy deployed at             ", factory);
-        }
+        address factory = _create2("BittyV1VaultFactoryProxy", initCode);
 
         address build = _create2("BittyV1VaultFactory", type(BittyV1VaultFactory).creationCode);
         if (address(uint160(uint256(vm.load(factory, ERC1967Utils.IMPLEMENTATION_SLOT)))) != build) {

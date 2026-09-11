@@ -55,6 +55,14 @@ contract WETHStub {
     receive() external payable {}
 }
 
+/// A second lending adapter with a DISTINCT lineage, so it is a separate position from `proto`.
+/// (Two adapters of the same lineage share one instance — that is the point of lineage keying.)
+contract EmptyLendingProtocol is MockLendingProtocol {
+    function protocolLineage() external pure override returns (bytes32) {
+        return keccak256("bitty.mock.lending.empty");
+    }
+}
+
 /**
  * The vault's own entry points: what it validates before delegating to a logic library.
  *
@@ -378,7 +386,7 @@ contract VaultEntrypointsTest is Test {
     /// A protocol the vault HAS used but has since emptied is skipped without a withdraw call, so a
     /// caller cannot pad the cover list with drained positions to burn the payer's gas.
     function test_aPositionWithNothingInItIsSkipped() public {
-        MockLendingProtocol empty = new MockLendingProtocol();
+        EmptyLendingProtocol empty = new EmptyLendingProtocol();
         guard.setProtocol(address(empty), LENDING_ID);
 
         vm.startPrank(owner);

@@ -311,6 +311,34 @@ contract FactoryTest is Test {
         assertEq(BittyV1Vault(payable(v)).owner(), owner, "the proxied factory mints a working vault");
     }
 
+    /**
+     * Once the proxy is on a factory BUILD (not the bootstrap), a further upgrade runs the factory's
+     * OWN _authorizeUpgrade — gated on owner() = the guard's configured owner — rather than the
+     * bootstrap's gate. Covers owner(), the onlyOwner modifier (both branches), and _authorizeUpgrade.
+     */
+    function test_ownerMayUpgradeTheFactoryLogicItself() public {
+        address factoryOwner = makeAddr("factoryOwner");
+        guard.setConfigAddress(CFG_OWNER, factoryOwner);
+
+        address proxy = address(new ERC1967Proxy(address(new BittyV1VaultFactoryBootstrap()), ""));
+        address firstBuild = address(new BittyV1VaultFactory());
+        vm.prank(factoryOwner);
+        UUPSUpgradeable(proxy).upgradeToAndCall(firstBuild, "");
+
+        assertEq(BittyV1VaultFactory(proxy).owner(), factoryOwner, "owner() reflects the guard's configured owner");
+
+        // The proxy now runs a factory build, so this upgrade goes through the factory's own onlyOwner.
+        address newBuild = address(new BittyV1VaultFactory());
+
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert(BittyV1VaultFactory.NotOwner.selector);
+        UUPSUpgradeable(proxy).upgradeToAndCall(newBuild, "");
+
+        vm.prank(factoryOwner);
+        UUPSUpgradeable(proxy).upgradeToAndCall(newBuild, "");
+        assertEq(_implOf(proxy), newBuild, "the owner upgraded the factory logic in place");
+    }
+
     function _implOf(address proxy) internal view returns (address) {
         bytes32 slot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
         return address(uint160(uint256(vm.load(proxy, slot))));

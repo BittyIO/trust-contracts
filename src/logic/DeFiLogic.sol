@@ -243,7 +243,7 @@ library DeFiLogic {
     function upgradeProtocol(address protocol, address newImplementation) external {
         DeFiStorage storage $ = BittyStorage.defi();
         _onlyInitialized($);
-        address instance = $.clonedProtocols[protocol];
+        address instance = _instanceOf($, protocol);
         if (instance == address(0)) revert ProtocolNotInstantiated();
         if (!IBittyV1Guard(BITTY_GUARD).isProtocolRegistered(newImplementation)) revert NotRegistered();
         bytes32 lineage = IBittyV1Protocol(instance).protocolLineage();
@@ -352,7 +352,7 @@ library DeFiLogic {
         if (assetAddress == address(0)) revert AddressZero();
         if (amount == 0) revert AmountIsZero();
 
-        address clone = $.clonedProtocols[withdrawProtocol];
+        address clone = _instanceOf($, withdrawProtocol);
         if (clone == address(0)) revert InvalidWithdrawableProtocol();
         if (amount != type(uint256).max) {
             if (IBittyV1Yield(clone).getBalance(assetAddress) < amount) revert InsufficientBalance();
@@ -384,26 +384,26 @@ library DeFiLogic {
         returns (uint256)
     {
         if (assetAddress == address(0)) revert AddressZero();
-        address clone = $.clonedProtocols[withdrawProtocol];
+        address clone = _instanceOf($, withdrawProtocol);
         if (clone == address(0)) return 0;
         return IBittyV1Yield(clone).getBalance(assetAddress);
     }
 
     function getPendingWithdrawalIds(address withdrawProtocol) external view returns (uint256[] memory) {
-        address clone = BittyStorage.defi().clonedProtocols[withdrawProtocol];
+        address clone = _instanceOf(BittyStorage.defi(), withdrawProtocol);
         if (clone == address(0)) return new uint256[](0);
         return IBittyV1Yield(clone).getPendingWithdrawalIds();
     }
 
     function claimWithdrawals(address withdrawProtocol, uint256[] memory ids) external {
         if (ids.length == 0) return;
-        address clone = BittyStorage.defi().clonedProtocols[withdrawProtocol];
+        address clone = _instanceOf(BittyStorage.defi(), withdrawProtocol);
         if (clone == address(0)) revert InvalidWithdrawableProtocol();
         IBittyV1Yield(clone).claimWithdrawals(ids);
     }
 
     function claimWithdrawalOne(address withdrawProtocol, uint256 id) external {
-        address clone = BittyStorage.defi().clonedProtocols[withdrawProtocol];
+        address clone = _instanceOf(BittyStorage.defi(), withdrawProtocol);
         if (clone == address(0)) revert InvalidWithdrawableProtocol();
         uint256[] memory ids = new uint256[](1);
         ids[0] = id;
@@ -506,7 +506,7 @@ library DeFiLogic {
     }
 
     function _ammClone(address ammProtocol) private view returns (address clone) {
-        clone = BittyStorage.defi().clonedProtocols[ammProtocol];
+        clone = _instanceOf(BittyStorage.defi(), ammProtocol);
         if (clone == address(0)) revert InvalidAMMProtocol();
     }
 
@@ -519,7 +519,7 @@ library DeFiLogic {
         DeFiStorage storage $ = BittyStorage.defi();
         liquidities = new uint256[](ammProtocols.length);
         for (uint256 i; i < ammProtocols.length; ++i) {
-            address clone = $.clonedProtocols[ammProtocols[i]];
+            address clone = _instanceOf($, ammProtocols[i]);
             liquidities[i] = clone == address(0) ? 0 : IBittyV1AMMProtocol(clone).getLiquidity(data[i]);
         }
     }
@@ -562,14 +562,29 @@ library DeFiLogic {
     }
 
     function getClone(address protocol) external view returns (address) {
-        return BittyStorage.defi().clonedProtocols[protocol];
+        return _instanceOf(BittyStorage.defi(), protocol);
+    }
+
+    function _lineageOf(address protocol) private view returns (bytes32 lineage) {
+        if (protocol == address(0)) return bytes32(0);
+        (bool ok, bytes memory data) =
+            protocol.staticcall(abi.encodeWithSelector(IBittyV1Protocol.protocolLineage.selector));
+        if (ok && data.length >= 32) lineage = abi.decode(data, (bytes32));
+    }
+
+    function _instanceOf(DeFiStorage storage $, address protocol) private view returns (address) {
+        bytes32 lineage = _lineageOf(protocol);
+        if (lineage == bytes32(0)) return address(0);
+        return $.clonedProtocols[lineage];
     }
 
     function _cloneProtocol(DeFiStorage storage $, address protocol) private returns (address clone) {
-        clone = $.clonedProtocols[protocol];
+        bytes32 lineage = IBittyV1Protocol(protocol).protocolLineage();
+        if (lineage == bytes32(0)) revert ProtocolLineageMismatch();
+        clone = $.clonedProtocols[lineage];
         if (clone != address(0)) return clone;
         clone = address(new ERC1967Proxy(protocol, abi.encodeCall(IBittyV1Protocol.initialize, (address(this)))));
-        $.clonedProtocols[protocol] = clone;
+        $.clonedProtocols[lineage] = clone;
     }
 
     function _getReceiptToken(address protocol, address asset) private view returns (address) {
@@ -607,7 +622,7 @@ library DeFiLogic {
         DeFiStorage storage $ = BittyStorage.defi();
         for (uint256 i; i < protocols.length; ++i) {
             if (_positionNFT(protocols[i]) == nftContract) revert ProtocolNFT();
-            address clone = $.clonedProtocols[protocols[i]];
+            address clone = _instanceOf($, protocols[i]);
             if (clone != address(0) && _positionNFT(clone) == nftContract) revert ProtocolNFT();
         }
     }

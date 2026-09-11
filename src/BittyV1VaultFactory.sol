@@ -7,10 +7,26 @@ import {EIP712} from "openzeppelin-contracts/contracts/utils/cryptography/EIP712
 import {UUPSUpgradeable} from "openzeppelin-contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {SignatureChecker} from "openzeppelin-contracts/contracts/utils/cryptography/SignatureChecker.sol";
 import {VaultAlreadyActivated, InvalidActivationSignature} from "./interfaces/IBittyV1VaultFactory.sol";
-import {BittyV1Vault} from "./BittyV1Vault.sol";
 import {BittyV1VaultBootstrap} from "./BittyV1VaultBootstrap.sol";
 import {IBittyV1Guard, IMPLEMENTATION_VAULT} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {BITTY_GUARD, BITTY_VAULT_BOOTSTRAP, CFG_GAS_WRAPPED, CFG_OWNER} from "./logic/Constants.sol";
+
+/**
+ * @dev Only the vault's activation selector, declared here rather than imported from {BittyV1Vault}.
+ *      Importing the concrete vault pulled its entire storage/logic closure into the factory's metadata,
+ *      so an unrelated change to vault storage rebuilt the factory implementation and forced a needless
+ *      proxy upgrade. The factory needs nothing but this one signature to initialise a fresh vault, so
+ *      its build now stays put unless the factory's OWN logic changes.
+ */
+interface IBittyV1VaultActivation {
+    function initialize(
+        address owner,
+        address gasWrapped,
+        bool allowlistEnabled,
+        address activationAsset,
+        uint256 activationAmount
+    ) external;
+}
 
 /**
  * @title BittyV1VaultFactory
@@ -74,7 +90,8 @@ contract BittyV1VaultFactory is EIP712, UUPSUpgradeable {
         address gasWrapped = IBittyV1Guard(BITTY_GUARD).getAddress(CFG_GAS_WRAPPED);
         BittyV1VaultBootstrap(payable(deployed))
             .upgradeToAndCall(
-                vaultImpl, abi.encodeCall(BittyV1Vault.initialize, (owner, gasWrapped, allowlistEnabled, asset, amount))
+                vaultImpl,
+                abi.encodeCall(IBittyV1VaultActivation.initialize, (owner, gasWrapped, allowlistEnabled, asset, amount))
             );
         emit VaultActivated(owner, deployed);
         vault = deployed;

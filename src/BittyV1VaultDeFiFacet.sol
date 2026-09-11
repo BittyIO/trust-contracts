@@ -3,7 +3,7 @@ pragma solidity ^0.8.34;
 
 import {BittyV1AccountBase} from "./BittyV1AccountBase.sol";
 import {DeFiLogic} from "./logic/DeFiLogic.sol";
-import {BittyStorage, DeFiStorage} from "./logic/BittyStorage.sol";
+import {BittyStorage} from "./logic/BittyStorage.sol";
 import {IBittyV1Guard, PROTOCOL_INTENT} from "guard-contracts/src/interfaces/IBittyV1Guard.sol";
 import {IBittyV1IntentProtocol} from "protocol-contracts/src/interfaces/IBittyV1IntentProtocol.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
@@ -210,10 +210,9 @@ contract BittyV1VaultDeFiFacet is BittyV1AccountBase {
         view
         returns (bytes4)
     {
-        DeFiStorage storage $ = BittyStorage.defi();
         for (uint256 i; i < protocols.length; i++) {
             if (IBittyV1Guard(BITTY_GUARD).protocolCategory(protocols[i]) != PROTOCOL_INTENT) continue;
-            address clone = $.clonedProtocols[protocols[i]];
+            address clone = DeFiLogic.getClone(protocols[i]);
             if (clone == address(0)) continue;
             try IBittyV1IntentProtocol(clone).isValidSignature(hash, signature) returns (bytes4 result) {
                 if (result == ERC1271_MAGIC_VALUE) return result;
