@@ -16,6 +16,7 @@ import {BittyV1VaultFactory} from "../src/BittyV1VaultFactory.sol";
 import {BittyV1VaultForwarder} from "../src/BittyV1VaultForwarder.sol";
 import {BittyV1AutoYieldKeeper} from "../src/BittyV1AutoYieldKeeper.sol";
 import {
+    BITTY_FEE_COLLECTOR,
     BITTY_FORWARDER,
     BITTY_GUARD,
     BITTY_VAULT_BOOTSTRAP,
@@ -204,8 +205,11 @@ contract Deploy is DeployScript {
             UUPSUpgradeable(forwarder).upgradeToAndCall(build, "");
             console2.log("forwarder moved to implementation     ", build);
         }
-
         BittyV1VaultForwarder fwd = BittyV1VaultForwarder(payable(forwarder));
+        if (!fwd.approvedRelayers(BITTY_FEE_COLLECTOR)) {
+            fwd.setRelayerApproval(BITTY_FEE_COLLECTOR, true);
+            console2.log("fee collector approved as relayer     ", BITTY_FEE_COLLECTOR);
+        }
         address relayer = getAddressOr("BITTY_RELAYER", address(0));
         if (relayer != address(0) && !fwd.approvedRelayers(relayer)) {
             fwd.setRelayerApproval(relayer, true);
