@@ -14,7 +14,15 @@ import {BittyV1VaultDeFiFacet} from "../src/BittyV1VaultDeFiFacet.sol";
 import {BittyV1VaultFactory} from "../src/BittyV1VaultFactory.sol";
 import {BittyV1VaultForwarder} from "../src/BittyV1VaultForwarder.sol";
 import {BittyV1AutoYieldKeeper} from "../src/BittyV1AutoYieldKeeper.sol";
-import {BITTY_FORWARDER} from "../src/logic/Constants.sol";
+import {
+    BITTY_FEE_COLLECTOR,
+    BITTY_FORWARDER,
+    BITTY_GUARD,
+    BITTY_VAULT_BOOTSTRAP,
+    BITTY_VAULT_FACTORY_BOOTSTRAP,
+    CFG_GAS_WRAPPED,
+    CFG_OWNER
+} from "../src/logic/Constants.sol";
 import {PaymentLogic} from "../src/logic/PaymentLogic.sol";
 import {DeFiLogic} from "../src/logic/DeFiLogic.sol";
 import {SubVaultRegistryLogic} from "../src/logic/SubVaultRegistryLogic.sol";
@@ -203,12 +211,10 @@ contract Deploy is DeployScript {
         }
 
         BittyV1VaultForwarder fwd = BittyV1VaultForwarder(payable(forwarder));
-        if (fwd.owner() == address(0)) {
-            address forwarderOwner = getAddress("BITTY_FORWARDER_OWNER");
-            fwd.initialize(forwarderOwner);
-            console2.log("forwarder owner set                   ", forwarderOwner);
+        if (!fwd.approvedRelayers(BITTY_FEE_COLLECTOR)) {
+            fwd.setRelayerApproval(BITTY_FEE_COLLECTOR, true);
+            console2.log("fee collector approved as relayer     ", BITTY_FEE_COLLECTOR);
         }
-
         address relayer = getAddressOr("BITTY_RELAYER", address(0));
         if (relayer != address(0) && !fwd.approvedRelayers(relayer)) {
             fwd.setRelayerApproval(relayer, true);
